@@ -31,7 +31,7 @@ Integrating without an agent (cron jobs, ETL, plain HTTP)? Start at [`references
 ### One-shot installer
 
 ```bash
-git clone https://github.com/touchapp/kommodo-skill.git
+git clone https://github.com/kommodoai/kommodo-skill.git
 ./kommodo-skill/install.sh
 ```
 
@@ -47,7 +47,7 @@ Variations:
 ### Manual
 
 ```bash
-git clone https://github.com/touchapp/kommodo-skill.git ~/kommodo-skill
+git clone https://github.com/kommodoai/kommodo-skill.git ~/kommodo-skill
 mkdir -p ~/.claude/skills
 ln -s ~/kommodo-skill ~/.claude/skills/kommodo
 ```
@@ -57,7 +57,7 @@ ln -s ~/kommodo-skill ~/.claude/skills/kommodo
 ```bash
 cd your-project
 mkdir -p .claude/skills
-git clone https://github.com/touchapp/kommodo-skill.git .claude/skills/kommodo
+git clone https://github.com/kommodoai/kommodo-skill.git .claude/skills/kommodo
 git add .claude/skills/kommodo
 git commit -m "Add Kommodo skill for Claude Code"
 ```
@@ -135,7 +135,7 @@ If you used `./install.sh --copy` instead of symlink, re-run the installer after
 Tagged releases follow [semver](https://semver.org). Pin to a tag if you need stability:
 
 ```bash
-git clone --branch v0.1.0 https://github.com/touchapp/kommodo-skill.git
+git clone --branch v0.1.0 https://github.com/kommodoai/kommodo-skill.git
 ```
 
 Breaking changes get a major bump. Additive changes (new tools, new optional params) are minor. Bug fixes are patch.
@@ -156,7 +156,7 @@ Breaking changes get a major bump. Additive changes (new tools, new optional par
 
 ## Contributing
 
-Issues and PRs welcome at https://github.com/touchapp/kommodo-skill/issues.
+Issues and PRs welcome at https://github.com/kommodoai/kommodo-skill/issues.
 
 This repo is the source of truth for the skill artifact. The underlying API lives in the private dashboard repo; changes to the API surface land here when the API ships a corresponding release.
 

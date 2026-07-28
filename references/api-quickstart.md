@@ -27,7 +27,7 @@ import os, time, requests
 from datetime import datetime, timezone
 
 BASE = "https://kommodo.ai/api/public/v2"
-TOKEN = os.environ["KOMMODO_API_TOKEN"]
+TOKEN = os.environ["KOMODO_API_TOKEN"]
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 
 def list_recordings(since_iso: str):
@@ -145,8 +145,9 @@ Same envelope as the list, plus:
 
 ### `GET /recordings/:id/transcript?format=json|vtt`
 
-- `format=vtt` (default) returns `text/vtt` — original WebVTT cues.
-- `format=json` returns `{ "format": "json", "cues": [{ "start_seconds", "end_seconds", "text" }] }`.
+- `format=json` (**default**) returns `{ "format": "json", "cues": [{ "start_seconds", "end_seconds", "text" }] }`.
+- `format=vtt` returns `text/vtt` — original WebVTT cues.
+- Any other value, or an omitted parameter, falls back to JSON.
 
 Returns `404` if no transcript exists yet (still processing or transcription disabled). Returns `502` if the upstream transcript file is unreachable or malformed — retry with backoff. Hard cap of 5 MB; larger transcripts return `413`.
 
@@ -156,8 +157,8 @@ Returns `404` if no transcript exists yet (still processing or transcription dis
 
 | Method  | Path                                   | Purpose                                      | Scope |
 | ------- | -------------------------------------- | -------------------------------------------- | ----- |
-| GET     | `/folders`                             | List folders (`parent_id` to scope; `member_id` for team-owner queries). | read  |
-| GET     | `/team/members`                        | List team members the token can see.         | read  |
+| GET     | `/folders`                             | List folders. `parent_id` to scope. `member_id` requires a **team-owner token with active premium** — a solo caller must omit it, even for their own uid. | read  |
+| GET     | `/team/members`                        | List team members. **Team-owner + active premium only**; every other caller gets 403. | read  |
 | PATCH   | `/recordings/:id`                      | Update `title`, `description`, `folder_id`.  | write |
 | POST    | `/recordings/:id/pages`                | Create a page from a recording.              | write |
 
@@ -182,10 +183,10 @@ For incremental syncs, combine `since` with cursor traversal — the cursor hand
 | Status | Meaning                                      | Action                                                          |
 | ------ | -------------------------------------------- | --------------------------------------------------------------- |
 | 401    | Missing or invalid token.                    | Reissue the token at /account.                                  |
-| 403    | Scope insufficient, or no access to record.  | Upgrade scope; verify the recording belongs to the token user.  |
+| 403    | Scope insufficient, no access to the record, **or a team-owner-only endpoint called by a non-owner / non-premium caller** (`/team/members`, and `member_id` on `/folders`). | Upgrade scope; verify the recording belongs to the token user. If it is the team-owner restriction, stop — do not retry; drop `member_id` or skip `/team/members`. |
 | 404    | Recording or transcript not found.           | Skip and continue. Transcripts are not ready instantly.         |
-| 413    | Transcript exceeds 5 MB.                     | Fetch the raw VTT URL via `urls.video`'s sibling files.         |
-| 429    | Rate limit exceeded.                         | Sleep until `X-RateLimit-Reset` (epoch seconds).                |
+| 413    | Transcript exceeds 5 MB.                     | No transcript URL is exposed. Fall back to `GET /recordings/:id` and use `ai.summary`. |
+| 429    | Rate limit exceeded.                         | Sleep `Retry-After` seconds. `X-RateLimit-Reset` is **seconds remaining**, not an epoch timestamp. |
 | 502    | Upstream transcript unreachable / malformed. | Retry with exponential backoff. Skip the recording after 3.    |
 | 5xx    | Other server error.                          | Retry with exponential backoff (start at 1s, cap at 60s).       |
 
@@ -196,8 +197,13 @@ def get(url, **kw):
     for attempt in range(5):
         r = requests.get(url, headers=HEADERS, timeout=30, **kw)
         if r.status_code == 429:
-            reset = int(r.headers.get("X-RateLimit-Reset", "60"))
-            time.sleep(max(1, reset - int(time.time())))
+            # Retry-After and X-RateLimit-Reset are both durations in seconds,
+            # NOT epoch timestamps. Subtracting time.time() here would yield a
+            # large negative number and produce a 1-second hot retry loop.
+            wait = int(r.headers.get("Retry-After")
+                       or r.headers.get("X-RateLimit-Reset")
+                       or 60)
+            time.sleep(max(1, wait))
             continue
         if 500 <= r.status_code < 600:
             time.sleep(2 ** attempt)
@@ -213,23 +219,23 @@ def get(url, **kw):
 
 ```bash
 # List the 5 most recent recordings
-curl -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
+curl -H "Authorization: Bearer $KOMODO_API_TOKEN" \
   "https://kommodo.ai/api/public/v2/recordings?limit=5"
 
 # Recordings since a watermark
-curl -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
+curl -H "Authorization: Bearer $KOMODO_API_TOKEN" \
   "https://kommodo.ai/api/public/v2/recordings?since=2026-04-20T00:00:00Z"
 
 # Detail
-curl -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
+curl -H "Authorization: Bearer $KOMODO_API_TOKEN" \
   "https://kommodo.ai/api/public/v2/recordings/<id>"
 
 # Transcript as JSON
-curl -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
+curl -H "Authorization: Bearer $KOMODO_API_TOKEN" \
   "https://kommodo.ai/api/public/v2/recordings/<id>/transcript?format=json"
 
 # Update title (write scope)
-curl -X PATCH -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
+curl -X PATCH -H "Authorization: Bearer $KOMODO_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"title":"New title"}' \
   "https://kommodo.ai/api/public/v2/recordings/<id>"
@@ -242,11 +248,11 @@ curl -X PATCH -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
 This document lives inside the Kommodo skill repo. If you use Claude Code, Cursor, Codex, or any agent that supports skills, install the skill instead of writing a client:
 
 ```bash
-git clone https://github.com/touchapp/kommodo-skill.git
+git clone https://github.com/kommodoai/kommodo-skill.git
 ./kommodo-skill/install.sh
 ```
 
-The skill wraps the same endpoints with tool definitions for `find_recordings`, `get_recording`, `get_transcript`, `update_recording`, `create_page`, `list_folders`, and `list_team_members`. Auth is handled via `KOMMODO_API_TOKEN` in your environment. See `SKILL.md` in this repo for the full tool reference.
+The skill wraps the same endpoints with tool definitions for `find_recordings`, `get_recording`, `get_transcript`, `update_recording`, `create_page`, `list_folders`, and `list_team_members`. Auth is handled via `KOMODO_API_TOKEN` in your environment. See `SKILL.md` in this repo for the full tool reference.
 
 ---
 

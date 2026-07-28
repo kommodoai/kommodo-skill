@@ -173,7 +173,7 @@ def list_folders(
 
 def list_team_members() -> dict[str, Any]:
     """Team owner and members. Use member ids for member_id filter."""
-    return _request("GET", "/api/public/v1/team/members")
+    return _request("GET", "/api/public/v2/team/members")
 
 
 # ========= Write tools (require read+write scope token) =========
