@@ -27,7 +27,7 @@ import os, time, requests
 from datetime import datetime, timezone
 
 BASE = "https://kommodo.ai/api/public/v2"
-TOKEN = os.environ["KOMODO_API_TOKEN"]
+TOKEN = os.environ["KOMMODO_API_TOKEN"]
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 
 def list_recordings(since_iso: str):
@@ -219,23 +219,23 @@ def get(url, **kw):
 
 ```bash
 # List the 5 most recent recordings
-curl -H "Authorization: Bearer $KOMODO_API_TOKEN" \
+curl -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
   "https://kommodo.ai/api/public/v2/recordings?limit=5"
 
 # Recordings since a watermark
-curl -H "Authorization: Bearer $KOMODO_API_TOKEN" \
+curl -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
   "https://kommodo.ai/api/public/v2/recordings?since=2026-04-20T00:00:00Z"
 
 # Detail
-curl -H "Authorization: Bearer $KOMODO_API_TOKEN" \
+curl -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
   "https://kommodo.ai/api/public/v2/recordings/<id>"
 
 # Transcript as JSON
-curl -H "Authorization: Bearer $KOMODO_API_TOKEN" \
+curl -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
   "https://kommodo.ai/api/public/v2/recordings/<id>/transcript?format=json"
 
 # Update title (write scope)
-curl -X PATCH -H "Authorization: Bearer $KOMODO_API_TOKEN" \
+curl -X PATCH -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"title":"New title"}' \
   "https://kommodo.ai/api/public/v2/recordings/<id>"
@@ -252,7 +252,7 @@ git clone https://github.com/kommodoai/kommodo-skill.git
 ./kommodo-skill/install.sh
 ```
 
-The skill wraps the same endpoints with tool definitions for `find_recordings`, `get_recording`, `get_transcript`, `update_recording`, `create_page`, `list_folders`, and `list_team_members`. Auth is handled via `KOMODO_API_TOKEN` in your environment. See `SKILL.md` in this repo for the full tool reference.
+The skill wraps the same endpoints with tool definitions for `find_recordings`, `get_recording`, `get_transcript`, `update_recording`, `create_page`, `list_folders`, and `list_team_members`. Auth is handled via `KOMMODO_API_TOKEN` in your environment. See `SKILL.md` in this repo for the full tool reference.
 
 ---
 

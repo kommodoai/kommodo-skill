@@ -31,7 +31,7 @@ Scopes:
 - **read** — default. List, detail, transcript, folders, team members.
 - **read+write** — rename, retag, move, create-page. Issued explicitly via the UI's "Read + write" toggle.
 
-Store the token in `KOMODO_API_TOKEN` env var. The scripts in `scripts/client.py` read this at call time; never interpolate the token into a prompt.
+Store the token in `KOMMODO_API_TOKEN` env var. The scripts in `scripts/client.py` read this at call time; never interpolate the token into a prompt.
 
 ## The 7 tools
 

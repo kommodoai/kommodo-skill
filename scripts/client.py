@@ -1,7 +1,8 @@
 """
 Thin HTTP client for the Kommodo public v2 API.
 
-Reads KOMODO_API_TOKEN and optional KOMODO_API_BASE_URL from env at call time.
+Reads KOMMODO_API_TOKEN and optional KOMMODO_API_BASE_URL from env at call time.
+The pre-rebrand KOMODO_* names are still accepted as a fallback.
 Raises KommodoAPIError on non-2xx responses with status + parsed body.
 """
 
@@ -26,14 +27,17 @@ class KommodoAPIError(RuntimeError):
 
 
 def _base_url() -> str:
-    return os.environ.get("KOMODO_API_BASE_URL", DEFAULT_BASE).rstrip("/")
+    base = os.environ.get("KOMMODO_API_BASE_URL") or os.environ.get("KOMODO_API_BASE_URL")
+    return (base or DEFAULT_BASE).rstrip("/")
 
 
 def _token() -> str:
-    tok = os.environ.get("KOMODO_API_TOKEN")
+    # KOMODO_API_TOKEN is the pre-rebrand name, still honoured so existing shells
+    # keep working. New setups should export KOMMODO_API_TOKEN.
+    tok = os.environ.get("KOMMODO_API_TOKEN") or os.environ.get("KOMODO_API_TOKEN")
     if not tok:
         raise RuntimeError(
-            "KOMODO_API_TOKEN not set. Generate a token at /account?tab=api."
+            "KOMMODO_API_TOKEN not set. Generate a token at /account?tab=api."
         )
     return tok
 
