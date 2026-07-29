@@ -100,7 +100,9 @@ Envelopes include `created_at` and `updated_at`. Store the highest `created_at` 
 | Code | Meaning                                               | Action                                                                                                        |
 | ---- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | 401  | Token missing/invalid                                 | Re-prompt user for a fresh token                                                                              |
-| 403  | Wrong scope, no permission to modify this recording, OR a team-owner-only endpoint called by a non-owner / non-premium caller | If scope issue, ask user to generate a read+write token. If permission, surface the recording owner and stop. On `list_team_members` or a `member_id` filter, tell the user the endpoint requires a team-owner token with active premium — do not retry. |
+| 403  | Read-only token used on a write endpoint              | Ask the user for a read+write token.                                                                          |
+| 403  | No permission to modify this recording                | Name the recording's owner and stop.                                                                          |
+| 403  | `list_team_members`, or `member_id` on `list_folders` | Team owners with premium only. Tell the user, and do not retry.                                               |
 | 404  | Recording not found or not visible to caller          | Confirm the id; the user may not have access                                                                  |
 | 409  | Recording already has a page (on `create_page`)       | Tell the user and stop — do not try to overwrite                                                              |
 | 413  | Transcript exceeds 5 MB                               | Rare; recording is unusually long. Fall back to `get_recording` summary instead.                              |
