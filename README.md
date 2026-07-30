@@ -31,7 +31,7 @@ Integrating without an agent (cron jobs, ETL, plain HTTP)? Start at [`references
 ### One-shot installer
 
 ```bash
-git clone https://github.com/touchapp/kommodo-skill.git
+git clone https://github.com/kommodoai/kommodo-skill.git
 ./kommodo-skill/install.sh
 ```
 
@@ -47,7 +47,7 @@ Variations:
 ### Manual
 
 ```bash
-git clone https://github.com/touchapp/kommodo-skill.git ~/kommodo-skill
+git clone https://github.com/kommodoai/kommodo-skill.git ~/kommodo-skill
 mkdir -p ~/.claude/skills
 ln -s ~/kommodo-skill ~/.claude/skills/kommodo
 ```
@@ -57,7 +57,7 @@ ln -s ~/kommodo-skill ~/.claude/skills/kommodo
 ```bash
 cd your-project
 mkdir -p .claude/skills
-git clone https://github.com/touchapp/kommodo-skill.git .claude/skills/kommodo
+git clone https://github.com/kommodoai/kommodo-skill.git .claude/skills/kommodo
 git add .claude/skills/kommodo
 git commit -m "Add Kommodo skill for Claude Code"
 ```
@@ -72,7 +72,7 @@ git commit -m "Add Kommodo skill for Claude Code"
 
 2. **Export it** in your shell profile:
    ```bash
-   echo 'export KOMODO_API_TOKEN="<paste from /account?tab=api>"' >> ~/.zshrc
+   echo 'export KOMMODO_API_TOKEN="<paste from /account?tab=api>"' >> ~/.zshrc
    source ~/.zshrc
    ```
 
@@ -87,7 +87,7 @@ git commit -m "Add Kommodo skill for Claude Code"
 No Claude Code handy? Call the client directly:
 
 ```bash
-export KOMODO_API_TOKEN="..."
+export KOMMODO_API_TOKEN="..."
 python3 -c "
 import sys
 sys.path.insert(0, 'scripts')
@@ -102,8 +102,8 @@ print(find_recordings(limit=3))
 
 | Variable | Required | Default | Notes |
 |---|---|---|---|
-| `KOMODO_API_TOKEN` | yes | — | Bearer token from the account page |
-| `KOMODO_API_BASE_URL` | no | `https://kommodo.ai` | Override only if directed by Kommodo support |
+| `KOMMODO_API_TOKEN` | yes | — | Bearer token from the account page |
+| `KOMMODO_API_BASE_URL` | no | `https://kommodo.ai` | Override only if directed by Kommodo support |
 
 ---
 
@@ -112,7 +112,7 @@ print(find_recordings(limit=3))
 The skill is an optional wrapper — the HTTP API is the real contract. Every tool call resolves to one HTTP request you can make yourself:
 
 ```bash
-curl -H "Authorization: Bearer $KOMODO_API_TOKEN" \
+curl -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
      "https://kommodo.ai/api/public/v2/recordings?limit=5"
 ```
 
@@ -135,7 +135,7 @@ If you used `./install.sh --copy` instead of symlink, re-run the installer after
 Tagged releases follow [semver](https://semver.org). Pin to a tag if you need stability:
 
 ```bash
-git clone --branch v0.1.0 https://github.com/touchapp/kommodo-skill.git
+git clone --branch v0.1.0 https://github.com/kommodoai/kommodo-skill.git
 ```
 
 Breaking changes get a major bump. Additive changes (new tools, new optional params) are minor. Bug fixes are patch.
@@ -146,8 +146,8 @@ Breaking changes get a major bump. Additive changes (new tools, new optional par
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `KOMODO_API_TOKEN not set` | env var missing | `export` it + restart your shell and Claude Code |
-| `401 Unauthorized` | token expired or wrong environment | Regenerate at `/account?tab=api`. Verify `KOMODO_API_BASE_URL` matches the token's environment. |
+| `KOMMODO_API_TOKEN not set` | env var missing | `export` it + restart your shell and Claude Code |
+| `401 Unauthorized` | token expired or wrong environment | Regenerate at `/account?tab=api`. Verify `KOMMODO_API_BASE_URL` matches the token's environment. |
 | `403 Write scope required` | Read-scoped token used for a write endpoint | Regenerate with the **Read + write** toggle |
 | `429 Too Many Requests` | Hit 1000 req/hr or 100 concurrent per token | Honor `Retry-After` header, back off |
 | Skill not detected | Claude Code didn't rescan `~/.claude/skills/` | Fully quit and relaunch |
@@ -156,7 +156,7 @@ Breaking changes get a major bump. Additive changes (new tools, new optional par
 
 ## Contributing
 
-Issues and PRs welcome at https://github.com/touchapp/kommodo-skill/issues.
+Issues and PRs welcome at https://github.com/kommodoai/kommodo-skill/issues.
 
 This repo is the source of truth for the skill artifact. The underlying API lives in the private dashboard repo; changes to the API surface land here when the API ships a corresponding release.
 

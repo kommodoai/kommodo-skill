@@ -86,16 +86,16 @@ List recordings the token can see, newest first.
 
 **Query parameters**
 
-| Param        | Type    | Notes                                                                |
-| ------------ | ------- | -------------------------------------------------------------------- |
-| `since`      | ISO8601 | Only recordings created on or after this timestamp.                  |
-| `until`      | ISO8601 | Only recordings created on or before this timestamp.                 |
-| `q`          | string  | Substring match on title.                                            |
+| Param        | Type    | Notes                                                                            |
+| ------------ | ------- | -------------------------------------------------------------------------------- |
+| `since`      | ISO8601 | Only recordings created on or after this timestamp.                              |
+| `until`      | ISO8601 | Only recordings created on or before this timestamp.                             |
+| `q`          | string  | Substring match on title.                                                        |
 | `folder_id`  | string  | Only recordings whose `parentId` matches. Caller must have access to the folder. |
-| `member_id`  | string  | Filter to a single team member. Team-owner + premium tokens only.    |
-| `has_page`   | bool    | `true` returns only recordings that have a published or draft page.  |
-| `cursor`     | opaque  | Pass through `next_cursor` from the previous response.               |
-| `limit`      | int     | Default 20, max 100.                                                 |
+| `member_id`  | string  | Filter to a single team member. Team-owner + premium tokens only.                |
+| `has_page`   | bool    | `true` returns only recordings that have a published or draft page.              |
+| `cursor`     | opaque  | Pass through `next_cursor` from the previous response.                           |
+| `limit`      | int     | Default 20, max 100.                                                             |
 
 **Response**
 
@@ -145,8 +145,9 @@ Same envelope as the list, plus:
 
 ### `GET /recordings/:id/transcript?format=json|vtt`
 
-- `format=vtt` (default) returns `text/vtt` — original WebVTT cues.
-- `format=json` returns `{ "format": "json", "cues": [{ "start_seconds", "end_seconds", "text" }] }`.
+- `format=json` (**default**) returns `{ "format": "json", "cues": [{ "start_seconds", "end_seconds", "text" }] }`.
+- `format=vtt` returns `text/vtt` — original WebVTT cues.
+- Any other value, or an omitted parameter, falls back to JSON.
 
 Returns `404` if no transcript exists yet (still processing or transcription disabled). Returns `502` if the upstream transcript file is unreachable or malformed — retry with backoff. Hard cap of 5 MB; larger transcripts return `413`.
 
@@ -154,12 +155,12 @@ Returns `404` if no transcript exists yet (still processing or transcription dis
 
 ## 4. Other endpoints
 
-| Method  | Path                                   | Purpose                                      | Scope |
-| ------- | -------------------------------------- | -------------------------------------------- | ----- |
-| GET     | `/folders`                             | List folders (`parent_id` to scope; `member_id` for team-owner queries). | read  |
-| GET     | `/team/members`                        | List team members the token can see.         | read  |
-| PATCH   | `/recordings/:id`                      | Update `title`, `description`, `folder_id`.  | write |
-| POST    | `/recordings/:id/pages`                | Create a page from a recording.              | write |
+| Method  | Path                                   | Purpose                                                                                                                                                   | Scope |
+| ------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| GET     | `/folders`                             | List folders. `parent_id` to scope. `member_id` requires a **team-owner token with active premium** — a solo caller must omit it, even for their own uid. | read  |
+| GET     | `/team/members`                        | List team members. **Team-owner + active premium only**; every other caller gets 403.                                                                     | read  |
+| PATCH   | `/recordings/:id`                      | Update `title`, `description`, `folder_id`.                                                                                                               | write |
+| POST    | `/recordings/:id/pages`                | Create a page from a recording.                                                                                                                           | write |
 
 Write endpoints require a `read+write` scope token and apply the same access rules as the dashboard (owner, or `fullAccess` on the parent folder).
 
@@ -179,15 +180,22 @@ For incremental syncs, combine `since` with cursor traversal — the cursor hand
 
 ## 6. Errors
 
-| Status | Meaning                                      | Action                                                          |
-| ------ | -------------------------------------------- | --------------------------------------------------------------- |
-| 401    | Missing or invalid token.                    | Reissue the token at /account.                                  |
-| 403    | Scope insufficient, or no access to record.  | Upgrade scope; verify the recording belongs to the token user.  |
-| 404    | Recording or transcript not found.           | Skip and continue. Transcripts are not ready instantly.         |
-| 413    | Transcript exceeds 5 MB.                     | Fetch the raw VTT URL via `urls.video`'s sibling files.         |
-| 429    | Rate limit exceeded.                         | Sleep until `X-RateLimit-Reset` (epoch seconds).                |
-| 502    | Upstream transcript unreachable / malformed. | Retry with exponential backoff. Skip the recording after 3.    |
-| 5xx    | Other server error.                          | Retry with exponential backoff (start at 1s, cap at 60s).       |
+| Status | Meaning                                          | Action                                                                                             |
+| ------ | ------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| 401    | Missing or invalid token.                        | Reissue the token at /account.                                                                     |
+| 403    | Your token is read-only and the endpoint writes. | Generate a read+write token at /account.                                                           |
+| 403    | You do not have access to that recording.        | Check the id belongs to your account or a folder shared with you.                                  |
+| 403    | Team-owner endpoint. See below.                  | Not retryable.                                                                                     |
+| 404    | Recording or transcript not found.               | Skip and continue. Transcripts are not ready instantly.                                            |
+| 413    | Transcript exceeds 5 MB.                         | No transcript URL is exposed. Fall back to `GET /recordings/:id` and use `ai.summary`.             |
+| 429    | Rate limit exceeded.                             | Sleep `Retry-After` seconds. `X-RateLimit-Reset` is **seconds remaining**, not an epoch timestamp. |
+| 502    | Upstream transcript unreachable / malformed.     | Retry with exponential backoff. Skip the recording after 3.                                        |
+| 5xx    | Other server error.                              | Retry with exponential backoff (start at 1s, cap at 60s).                                          |
+
+Two endpoints are restricted to team owners with an active premium subscription:
+`GET /team/members`, and the `member_id` parameter on `GET /folders`. Every other caller
+receives a 403. Retrying will not help — omit `member_id`, or skip `/team/members` and
+pass a uid you already hold.
 
 A pragmatic retry policy for cron jobs:
 
@@ -196,8 +204,13 @@ def get(url, **kw):
     for attempt in range(5):
         r = requests.get(url, headers=HEADERS, timeout=30, **kw)
         if r.status_code == 429:
-            reset = int(r.headers.get("X-RateLimit-Reset", "60"))
-            time.sleep(max(1, reset - int(time.time())))
+            # Retry-After and X-RateLimit-Reset are both durations in seconds,
+            # NOT epoch timestamps. Subtracting time.time() here would yield a
+            # large negative number and produce a 1-second hot retry loop.
+            wait = int(r.headers.get("Retry-After")
+                       or r.headers.get("X-RateLimit-Reset")
+                       or 60)
+            time.sleep(max(1, wait))
             continue
         if 500 <= r.status_code < 600:
             time.sleep(2 ** attempt)
@@ -242,7 +255,7 @@ curl -X PATCH -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
 This document lives inside the Kommodo skill repo. If you use Claude Code, Cursor, Codex, or any agent that supports skills, install the skill instead of writing a client:
 
 ```bash
-git clone https://github.com/touchapp/kommodo-skill.git
+git clone https://github.com/kommodoai/kommodo-skill.git
 ./kommodo-skill/install.sh
 ```
 

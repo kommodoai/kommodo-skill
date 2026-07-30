@@ -51,16 +51,16 @@ else
   echo "Copied $SKILL_SRC -> $TARGET"
 fi
 
-if [[ -z "${KOMODO_API_TOKEN:-}" ]]; then
+if [[ -z "${KOMMODO_API_TOKEN:-}" ]]; then
   cat <<EOF
 
 Skill installed. One more step — set your API token:
 
-  export KOMODO_API_TOKEN="<paste from https://kommodo.ai/account?tab=api>"
+  export KOMMODO_API_TOKEN="<paste from https://kommodo.ai/account?tab=api>"
 
 Then fully quit and relaunch Claude Code.
 EOF
 else
   echo
-  echo "Skill installed. KOMODO_API_TOKEN is set — you're ready. Relaunch Claude Code to pick up the skill."
+  echo "Skill installed. KOMMODO_API_TOKEN is set — you're ready. Relaunch Claude Code to pick up the skill."
 fi

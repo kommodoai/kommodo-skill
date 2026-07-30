@@ -1,6 +1,6 @@
 # Worked scenarios
 
-End-to-end examples of how the seven tools compose. Assume `KOMODO_API_TOKEN`
+End-to-end examples of how the seven tools compose. Assume `KOMMODO_API_TOKEN`
 is set. All tool calls are via `scripts/client.py`.
 
 ---

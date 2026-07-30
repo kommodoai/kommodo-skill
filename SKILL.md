@@ -31,7 +31,7 @@ Scopes:
 - **read** — default. List, detail, transcript, folders, team members.
 - **read+write** — rename, retag, move, create-page. Issued explicitly via the UI's "Read + write" toggle.
 
-Store the token in `KOMODO_API_TOKEN` env var. The scripts in `scripts/client.py` read this at call time; never interpolate the token into a prompt.
+Store the token in `KOMMODO_API_TOKEN` env var. The scripts in `scripts/client.py` read this at call time; never interpolate the token into a prompt.
 
 ## The 7 tools
 
@@ -48,6 +48,18 @@ All tools are thin Python wrappers around the HTTP API in `scripts/client.py`. T
 4. `list_folders(parent_id=None, member_id=None, cursor=None)` — folders the caller owns or has access to. Pass `member_id` (team-owner + premium tokens only) to list folders owned by a specific team member instead.
 
 5. `list_team_members()` — needed to resolve "who"-filters (`member_id` takes a uid).
+   **Team-owner + premium only.** Returns 403 for any caller who is not the team owner,
+   and 403 again if the owner lacks an active premium subscription.
+
+   **`member_id` is not uniform across tools — do not generalise:**
+
+   | Tool | Solo caller passing their **own** uid | Any other uid |
+   | --- | --- | --- |
+   | `find_recordings(member_id=…)` | Allowed (no-op filter) | 403 |
+   | `list_folders(member_id=…)` | **403** — no own-uid exemption | 403 |
+
+   So a solo caller must **omit `member_id` entirely** on `list_folders`. Passing your own
+   uid there fails even though the same value works on `find_recordings`.
 
 ### Write — require read+write scoped token
 
@@ -88,7 +100,9 @@ Envelopes include `created_at` and `updated_at`. Store the highest `created_at` 
 | Code | Meaning                                               | Action                                                                                                        |
 | ---- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | 401  | Token missing/invalid                                 | Re-prompt user for a fresh token                                                                              |
-| 403  | Wrong scope OR no permission to modify this recording | If scope issue, ask user to generate a read+write token. If permission, surface the recording owner and stop. |
+| 403  | Read-only token used on a write endpoint              | Ask the user for a read+write token.                                                                          |
+| 403  | No permission to modify this recording                | Name the recording's owner and stop.                                                                          |
+| 403  | `list_team_members`, or `member_id` on `list_folders` | Team owners with premium only. Tell the user, and do not retry.                                               |
 | 404  | Recording not found or not visible to caller          | Confirm the id; the user may not have access                                                                  |
 | 409  | Recording already has a page (on `create_page`)       | Tell the user and stop — do not try to overwrite                                                              |
 | 413  | Transcript exceeds 5 MB                               | Rare; recording is unusually long. Fall back to `get_recording` summary instead.                              |
