@@ -62,6 +62,12 @@ git add .claude/skills/kommodo
 git commit -m "Add Kommodo skill for Claude Code"
 ```
 
+### Cloud sessions (claude.ai/code)
+
+Cloud sessions don't carry your local `~/.claude` folder over. Use the
+project-committed option above in the repo the session opens, and set
+`KOMMODO_API_TOKEN` as an environment variable in that cloud environment's settings.
+
 ---
 
 ## Setup
@@ -70,11 +76,22 @@ git commit -m "Add Kommodo skill for Claude Code"
    - **Read** — search / summaries / transcripts
    - **Read + write** — plus rename, retag, move, create-page
 
-2. **Export it** in your shell profile:
+2. **Export it in `~/.zshenv`** (not `~/.zshrc`):
    ```bash
-   echo 'export KOMMODO_API_TOKEN="<paste from /account?tab=api>"' >> ~/.zshrc
-   source ~/.zshrc
+   echo 'export KOMMODO_API_TOKEN="<paste from /account?tab=api>"' >> ~/.zshenv
+   source ~/.zshenv
    ```
+   Claude Code runs commands in non-interactive shells, which read `~/.zshenv` but
+   never `~/.zshrc`. A token that lives only in `~/.zshrc` works in your terminal
+   and fails for the agent with `KOMMODO_API_TOKEN not set`. If your token is
+   already in `~/.zshrc`, add this line to `~/.zshenv` to load it from there, so you
+   still keep a single copy to rotate:
+   ```bash
+   eval "$(grep -m1 '^export KOMMODO_API_TOKEN=' ~/.zshrc)"
+   ```
+
+   Each person should generate their own token. Tokens are tied to the user and to
+   the recordings that user can see, so don't share one.
 
 3. **Restart Claude Code** fully (quit, not just reload) so it picks up the new skill.
 
@@ -146,7 +163,7 @@ Breaking changes get a major bump. Additive changes (new tools, new optional par
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `KOMMODO_API_TOKEN not set` | env var missing | `export` it + restart your shell and Claude Code |
+| `KOMMODO_API_TOKEN not set` | env var missing, or set only in `~/.zshrc` (agent shells don't read it) | `export` it in `~/.zshenv` + restart Claude Code |
 | `401 Unauthorized` | token expired or wrong environment | Regenerate at `/account?tab=api`. Verify `KOMMODO_API_BASE_URL` matches the token's environment. |
 | `403 Write scope required` | Read-scoped token used for a write endpoint | Regenerate with the **Read + write** toggle |
 | `429 Too Many Requests` | Hit 1000 req/hr or 100 concurrent per token | Honor `Retry-After` header, back off |

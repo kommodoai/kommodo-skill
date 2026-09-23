@@ -27,7 +27,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 SKILL_SRC="$(cd "$(dirname "$0")" && pwd)"
-SKILL_NAME="$(basename "$SKILL_SRC")"
+# Name the install after the skill's frontmatter `name:` (not the clone's
+# directory name, which is usually `kommodo-skill`).
+SKILL_NAME="$(awk -F': *' '/^name:/{print $2; exit}' "$SKILL_SRC/SKILL.md")"
+SKILL_NAME="${SKILL_NAME:-kommodo}"
 
 if [[ -n "$PROJECT_DIR" ]]; then
   TARGET_ROOT="$PROJECT_DIR/.claude/skills"
@@ -54,9 +57,10 @@ fi
 if [[ -z "${KOMMODO_API_TOKEN:-}" ]]; then
   cat <<EOF
 
-Skill installed. One more step — set your API token:
+Skill installed. One more step — set your API token in ~/.zshenv (not
+~/.zshrc: agent shells are non-interactive and never read ~/.zshrc):
 
-  export KOMMODO_API_TOKEN="<paste from https://kommodo.ai/account?tab=api>"
+  echo 'export KOMMODO_API_TOKEN="<paste from https://kommodo.ai/account?tab=api>"' >> ~/.zshenv
 
 Then fully quit and relaunch Claude Code.
 EOF
