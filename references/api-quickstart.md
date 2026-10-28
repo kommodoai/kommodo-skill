@@ -4,7 +4,7 @@ Upload media; read recordings, transcripts, AI metadata, folders, and team membe
 
 **Base URL:** `https://kommodo.ai/api/public/v2`
 **Auth:** `Authorization: Bearer <token>`
-**Rate limit:** 1000 requests/hour, 100 concurrent per token. Headers `X-RateLimit-Remaining` and `X-RateLimit-Reset` are returned on every response.
+**Request pacing:** Bearer-authenticated v2 calls include `X-RateLimit-Remaining` and `X-RateLimit-Reset`. On `429`, wait the `Retry-After` duration rather than hard-coding a quota.
 
 ---
 
@@ -12,9 +12,9 @@ Upload media; read recordings, transcripts, AI metadata, folders, and team membe
 
 1. Sign in at https://kommodo.ai and open **Account → API**.
 2. Click **Generate token**. Choose `read` (default) or `read+write` for uploads and other write operations.
-3. Copy the token. It is shown once. Treat it like a password.
+3. Copy the token. Treat it like a password.
 
-Tokens are user-scoped. A team-owner token with an active premium subscription sees all team members' recordings; a solo token sees only the user's own recordings.
+Tokens are user-scoped. Team visibility follows the same live account and group policy as the dashboard; a solo token sees only the user's own recordings.
 
 ---
 
@@ -90,12 +90,16 @@ List recordings the token can see, newest first.
 | ------------ | ------- | -------------------------------------------------------------------------------- |
 | `since`      | ISO8601 | Only recordings created on or after this timestamp.                              |
 | `until`      | ISO8601 | Only recordings created on or before this timestamp.                             |
-| `q`          | string  | Substring match on title.                                                        |
+| `q`          | string  | Recording-title search only. Does not search transcripts or AI metadata.         |
 | `folder_id`  | string  | Only recordings whose `parentId` matches. Caller must have access to the folder. |
-| `member_id`  | string  | Filter to a single team member. Team-owner + premium tokens only.                |
+| `member_id`  | string  | Filter to a team member visible under the caller's account policy.               |
 | `has_page`   | bool    | `true` returns only recordings that have a published or draft page.              |
 | `cursor`     | opaque  | Pass through `next_cursor` from the previous response.                           |
 | `limit`      | int     | Default 20, max 100.                                                             |
+
+For libraries over 1,000 recordings, combine `q` or `has_page` with a bounded
+`since` / `until` window on solo accounts. A `folder_id` request can inspect
+only the newest 1,000 recordings in that folder, even when dates are supplied.
 
 **Response**
 
@@ -157,14 +161,37 @@ Returns `404` if no transcript exists yet (still processing or transcription dis
 
 | Method  | Path                                   | Purpose                                                                                                                                                   | Scope |
 | ------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
-| GET     | `/folders`                             | List folders. `parent_id` to scope. `member_id` requires a **team-owner token with active premium** — a solo caller must omit it, even for their own uid. | read  |
-| GET     | `/team/members`                        | List team members. **Team-owner + active premium only**; every other caller gets 403.                                                                     | read  |
+| GET     | `/folders`                             | List owned and directly shared folders. `parent_id` scopes a level; `member_id` requires visibility to that member.                                      | read  |
+| POST    | `/folders`                             | Create under `parent_id`, or under the caller's root when omitted.                                                                                        | write |
+| PATCH   | `/folders/:id`                         | Rename a folder the caller owns or has full access to.                                                                                                    | write |
+| DELETE  | `/folders/:id`                         | Delete an empty non-root folder. Returns 409 instead of recursively deleting content.                                                                     | write |
+| GET     | `/team/members`                        | List the account roster. **Account-owner only**; other callers get 403.                                                                                   | read  |
 | PATCH   | `/recordings/:id`                      | Update `title`, `description`, `folder_id`.                                                                                                               | write |
 | POST    | `/recordings/:id/pages`                | Create a page from a recording.                                                                                                                           | write |
 | POST    | `/uploads`                             | Initialize an image or multipart-video upload.                                                                                                            | write |
 | POST    | `/uploads/:upload_id/complete`         | Queue a completed multipart video for processing.                                                                                                         | write |
 
-Write endpoints require a `read+write` scope token and apply the same access rules as the dashboard (owner, or `fullAccess` on the parent folder).
+Write endpoints require a `read+write` scope token and apply the same access rules as the dashboard. Folder and recording changes require ownership or `fullAccess` at the relevant folder boundary.
+
+Folder writes are ordinary JSON requests:
+
+```bash
+# Create under your root (add parent_id to create a subfolder)
+curl -X POST -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Customer calls"}' \
+  "https://kommodo.ai/api/public/v2/folders"
+
+# Rename
+curl -X PATCH -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Customer calls — archived"}' \
+  "https://kommodo.ai/api/public/v2/folders/<folder-id>"
+
+# Delete only after moving every child folder, recording, and guide
+curl -X DELETE -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
+  "https://kommodo.ai/api/public/v2/folders/<folder-id>"
+```
 
 ---
 
@@ -248,17 +275,17 @@ For incremental syncs, combine `since` with cursor traversal — the cursor hand
 | 401    | Missing or invalid token.                        | Reissue the token at /account.                                                                     |
 | 403    | Your token is read-only and the endpoint writes. | Generate a read+write token at /account.                                                           |
 | 403    | You do not have access to that recording.        | Check the id belongs to your account or a folder shared with you.                                  |
-| 403    | Team-owner endpoint. See below.                  | Not retryable.                                                                                     |
+| 403    | Account policy or scope denies the operation.    | Not retryable without changing the token scope or account access.                                  |
 | 404    | Recording or transcript not found.               | Skip and continue. Transcripts are not ready instantly.                                            |
 | 413    | Transcript exceeds 5 MB.                         | No transcript URL is exposed. Fall back to `GET /recordings/:id` and use `ai.summary`.             |
-| 429    | Rate limit exceeded.                             | Sleep `Retry-After` seconds. `X-RateLimit-Reset` is **seconds remaining**, not an epoch timestamp. |
+| 409    | Folder is not empty.                             | Move its child folders, recordings, and guides first. Do not recursively delete them.              |
+| 429    | Request pacing limit reached.                    | Sleep `Retry-After` seconds. `X-RateLimit-Reset` is **seconds remaining**, not an epoch timestamp. |
 | 502    | Upstream transcript unreachable / malformed.     | Retry with exponential backoff. Skip the recording after 3.                                        |
 | 5xx    | Other server error.                              | Retry with exponential backoff (start at 1s, cap at 60s).                                          |
 
-Two endpoints are restricted to team owners with an active premium subscription:
-`GET /team/members`, and the `member_id` parameter on `GET /folders`. Every other caller
-receives a 403. Retrying will not help — omit `member_id`, or skip `/team/members` and
-pass a uid you already hold.
+`GET /team/members` is restricted to account owners. The `member_id` parameter on
+`GET /folders` requires that the account visibility policy expose that member. Retrying
+will not help when the policy denies the request.
 
 A pragmatic retry policy for cron jobs:
 
@@ -324,7 +351,7 @@ git clone https://github.com/kommodoai/kommodo-skill.git
 ./kommodo-skill/install.sh
 ```
 
-The skill wraps the same endpoints with tool definitions for `upload_video`, `upload_image`, `find_recordings`, `get_recording`, `get_transcript`, `update_recording`, `create_page`, `list_folders`, and `list_team_members`. Auth is handled via `KOMMODO_API_TOKEN` in your environment. See `SKILL.md` in this repo for the full tool reference.
+The skill wraps the same endpoints with tool definitions for uploads, recording retrieval and updates, Page creation, folder listing and writes, and team-member lookup. Auth is handled via `KOMMODO_API_TOKEN` in your environment. See `SKILL.md` in this repo for the full tool reference.
 
 ---
 

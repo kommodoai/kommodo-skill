@@ -1,6 +1,6 @@
 # Worked scenarios
 
-End-to-end examples of how the seven tools compose. Assume `KOMMODO_API_TOKEN`
+End-to-end examples of how the tools compose. Assume `KOMMODO_API_TOKEN`
 is set. All tool calls are via `scripts/client.py`.
 
 ---
@@ -68,7 +68,7 @@ from skills.kommodo.scripts.client import (
     update_recording,
 )
 
-# 1. Locate the recording (e.g., by title substring + date window)
+# 1. Locate the recording (e.g., by title search + creation-date window)
 batch = find_recordings(query="standup", since="2026-04-16T00:00:00Z", until="2026-04-16T23:59:59Z")
 candidates = batch["recordings"]
 if len(candidates) != 1:

@@ -7,7 +7,7 @@ Use this as a jumping-off point when translating a user's question into a
 
 | Param         | Shape      | Notes                                                                                                                                 |
 | ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `query` / `q` | string     | Title substring. Typesense full-text on team-owner path; case-insensitive `includes` on solo path.                                    |
+| `query` / `q` | string     | Title search only. It does not search transcripts, summaries, tags, or suggested titles.                                              |
 | `since`       | ISO 8601   | Inclusive lower bound on `created_at`.                                                                                                |
 | `until`       | ISO 8601   | Inclusive upper bound.                                                                                                                |
 | `folder_id`   | string     | Only recordings whose `parentId` matches.                                                                                             |
@@ -15,6 +15,11 @@ Use this as a jumping-off point when translating a user's question into a
 | `has_page`    | bool       | `true` → only recordings with a page; `false` → only recordings without one.                                                          |
 | `limit`       | int 1..100 | Default 20.                                                                                                                           |
 | `cursor`      | opaque     | From previous response's `next_cursor`.                                                                                               |
+
+For libraries over 1,000 recordings, use a bounded `since` / `until` window
+when combining `query` or `has_page` on a solo account. A `folder_id` request
+can inspect only the newest 1,000 recordings in that folder, even when dates
+are supplied.
 
 ## Not supported in Phase 1 (filter client-side after `find_recordings`)
 
@@ -27,7 +32,7 @@ Use this as a jumping-off point when translating a user's question into a
 | Param       | Shape  | Notes                                                                                                                |
 | ----------- | ------ | -------------------------------------------------------------------------------------------------------------------- |
 | `parent_id` | string | Folder children of this id. Pass `""` for root.                                                                      |
-| `member_id` | uid    | Folders owned by this uid. **Team-owner + premium tokens only**; otherwise 403. Useful for the team→member→folders walk. |
+| `member_id` | uid    | Folders owned by this uid. The caller must have team-content visibility for that member. Useful for the team→member→folders walk. |
 | `cursor`    | opaque | From previous `next_cursor`.                                                                                          |
 
 ## Recipes
@@ -46,7 +51,8 @@ Use this as a jumping-off point when translating a user's question into a
 
 ### "What folders does Alice keep her work in?"
 
-Requires a team-owner + premium token.
+Discovering Alice through `list_team_members` requires the account-owner token.
+Calling `list_folders(member_id=…)` requires team-content visibility for Alice.
 
 1. `list_team_members()` → find Alice's uid.
 2. `list_folders(member_id=alice_uid)` → her folders, owned-only.
@@ -59,7 +65,7 @@ Requires a team-owner + premium token.
 
 ### "Find my video about the Stripe migration"
 
-1. `find_recordings(query="Stripe migration")` — Typesense full-text over `name`.
+1. `find_recordings(query="Stripe migration")` — searches recording titles.
 2. Transcript full-text is **not** searchable today; if title doesn't match, expand date range and scan summaries via `get_recording`.
 
 ### "List recordings that already have a page published"
@@ -67,7 +73,7 @@ Requires a team-owner + premium token.
 1. `find_recordings(has_page=true)`.
 2. Client-side keep only `page.published == true`.
 
-### "Incremental sync every 30 min"
+### "Find recordings created since the last run"
 
 ```
 last_seen = stored_timestamp
@@ -78,3 +84,6 @@ while batch.next_cursor:
 process(batch.recordings)
 stored_timestamp = max(r.created_at for r in all_batches)
 ```
+
+`since` filters `created_at`; it is not a change feed. It will not return an
+older recording merely because that recording was renamed, moved, or updated.

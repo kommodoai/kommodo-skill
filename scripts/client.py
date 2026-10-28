@@ -168,9 +168,9 @@ def list_folders(
     """
     {folders: [...], next_cursor: str | None}
 
-    member_id (team-owner + premium tokens only): list folders owned by a
-    specific team member. Without it, returns folders the caller owns or has
-    been shared on.
+    member_id: list folders owned by a member visible under the caller's
+    account policy. Without it, returns folders the caller owns or has been
+    shared on.
     """
     return _request(
         "GET",
@@ -184,7 +184,7 @@ def list_folders(
 
 
 def list_team_members() -> dict[str, Any]:
-    """Team owner and members. Use member ids for member_id filter."""
+    """Account roster for authorized owners. Use ids for member_id filters."""
     return _request("GET", "/api/public/v2/team/members")
 
 
@@ -219,6 +219,24 @@ def update_recording(
     return _request("PATCH", f"/api/public/v2/recordings/{id}", body=body)
 
 
+def create_folder(name: str, parent_id: str | None = None) -> dict[str, Any]:
+    """Create a folder below parent_id, or below the caller's root if omitted."""
+    body: dict[str, Any] = {"name": name}
+    if parent_id is not None:
+        body["parent_id"] = parent_id
+    return _request("POST", "/api/public/v2/folders", body=body)
+
+
+def rename_folder(id: str, name: str) -> dict[str, Any]:
+    """Rename a folder the caller owns or has full access to."""
+    return _request("PATCH", f"/api/public/v2/folders/{id}", body={"name": name})
+
+
+def delete_folder(id: str) -> dict[str, Any]:
+    """Delete an empty non-root folder. Returns {id, deleted: true}."""
+    return _request("DELETE", f"/api/public/v2/folders/{id}")
+
+
 def create_page(
     recording_id: str,
     *,
@@ -227,7 +245,7 @@ def create_page(
     publish: bool = False,
     template_id: str | None = None,
 ) -> dict[str, Any]:
-    """Convert a recording into a page. 409 if one already exists."""
+    """Create a default-layout page. template_id is metadata; 409 if one exists."""
     body: dict[str, Any] = {"publish": publish}
     if headline is not None:
         body["headline"] = headline

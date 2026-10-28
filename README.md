@@ -8,7 +8,7 @@ We are actively working on this API. Feedback is welcome! feedback@kommodo.ai
 
 ## What you get
 
-Nine named tools backed by the public API:
+Named tools backed by the public API:
 
 | Tool | What it does |
 |---|---|
@@ -16,6 +16,9 @@ Nine named tools backed by the public API:
 | `get_recording` | Full envelope including AI summary, chapters, action items |
 | `get_transcript` | JSON cues or WEBVTT, server-proxied |
 | `list_folders` | Folders you own or have access to |
+| `create_folder` | Create a root child or subfolder (write scope) |
+| `rename_folder` | Rename a folder (write scope) |
+| `delete_folder` | Delete an empty non-root folder (write scope) |
 | `list_team_members` | Team owner + member list (team-owner-only) |
 | `update_recording` | Rename, retag, update description, move folder (write scope) |
 | `create_page` | Convert a recording into a published page (write scope) |
@@ -70,7 +73,7 @@ git commit -m "Add Kommodo skill for Claude Code"
 
 1. **Generate an API token** at https://kommodo.ai/account?tab=api. Pick scope:
    - **Read** — search / summaries / transcripts
-   - **Read + write** — plus file uploads, rename, retag, move, create-page
+   - **Read + write** — plus file uploads, folder changes, rename, retag, move, create-page
 
 2. **Export it** in your shell profile:
    ```bash
@@ -167,9 +170,9 @@ Breaking changes get a major bump. Additive changes (new tools, new optional par
 | Symptom | Cause | Fix |
 |---|---|---|
 | `KOMMODO_API_TOKEN not set` | env var missing | `export` it + restart your shell and Claude Code |
-| `401 Unauthorized` | token expired or wrong environment | Regenerate at `/account?tab=api`. Verify `KOMMODO_API_BASE_URL` matches the token's environment. |
+| `401 Unauthorized` | token invalid, revoked, or for another environment | Regenerate at `/account?tab=api`. Verify `KOMMODO_API_BASE_URL` matches the token's environment. |
 | `403 Write scope required` | Read-scoped token used for a write endpoint | Regenerate with the **Read + write** toggle |
-| `429 Too Many Requests` | Hit 1000 req/hr or 100 concurrent per token | Honor `Retry-After` header, back off |
+| `429 Too Many Requests` | Current request pacing limit reached | Honor `Retry-After` and `X-RateLimit-Reset`; do not hard-code a quota |
 | Skill not detected | Claude Code didn't rescan `~/.claude/skills/` | Fully quit and relaunch |
 
 ---
