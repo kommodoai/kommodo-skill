@@ -100,6 +100,7 @@ class UploadClientTests(unittest.TestCase):
                     "POST",
                     "/api/public/v2/uploads/upload-id/complete",
                     body={"completion_token": "completion-token"},
+                    retry_server_errors=True,
                 ),
             ],
         )
@@ -111,6 +112,130 @@ class UploadClientTests(unittest.TestCase):
         self.assertEqual(complete[3], "application/xml")
         self.assertIn(b"<PartNumber>3</PartNumber>", complete[2] or b"")
         self.assertIn(b'"etag-3"', complete[2] or b"")
+
+    def test_upload_video_aborts_failed_provider_and_uses_next(self) -> None:
+        initialized = {
+            "upload": {
+                "chunk_size_bytes": 20,
+                "providers": [
+                    {
+                        "upload_parts": [
+                            {"part_number": 1, "url": "https://first/part"}
+                        ],
+                        "complete_url": "https://first/complete",
+                        "abort_url": "https://first/abort",
+                    },
+                    {
+                        "upload_parts": [
+                            {"part_number": 1, "url": "https://second/part"}
+                        ],
+                        "complete_url": "https://second/complete",
+                        "abort_url": "https://second/abort",
+                    },
+                ],
+            },
+            "completion": {
+                "url": "/api/public/v2/uploads/upload-id/complete",
+                "token": "completion-token",
+            },
+        }
+        queued = {"recording_id": "recording-id", "status": "processing"}
+        storage_calls: list[tuple[str, str]] = []
+
+        def storage_request(
+            url: str,
+            *,
+            method: str,
+            data: bytes | None = None,
+            content_type: str | None = None,
+        ) -> FakeResponse:
+            storage_calls.append((url, method))
+            if url == "https://first/complete":
+                raise OSError("provider unavailable")
+            if method == "PUT":
+                return FakeResponse('"etag"')
+            return FakeResponse()
+
+        with tempfile.TemporaryDirectory() as directory:
+            video = Path(directory) / "meeting.mp4"
+            video.write_bytes(b"video")
+            with (
+                patch.object(client, "_request", side_effect=[initialized, queued]),
+                patch.object(client, "_storage_request", side_effect=storage_request),
+            ):
+                result = client.upload_video(video, concurrency=1)
+
+        self.assertEqual(result, queued)
+        self.assertEqual(
+            storage_calls,
+            [
+                ("https://first/part", "PUT"),
+                ("https://first/complete", "POST"),
+                ("https://first/abort", "DELETE"),
+                ("https://second/part", "PUT"),
+                ("https://second/complete", "POST"),
+            ],
+        )
+
+    def test_upload_video_accepts_already_finalized_retry(self) -> None:
+        initialized = {
+            "upload_id": "upload-id",
+            "recording_id": "recording-id",
+            "upload": {
+                "chunk_size_bytes": 20,
+                "providers": [
+                    {
+                        "upload_parts": [
+                            {"part_number": 1, "url": "https://storage/part"}
+                        ],
+                        "complete_url": "https://storage/complete",
+                        "abort_url": "https://storage/abort",
+                    }
+                ],
+            },
+            "completion": {
+                "url": "/api/public/v2/uploads/upload-id/complete",
+                "token": "completion-token",
+            },
+        }
+
+        def storage_request(
+            url: str,
+            *,
+            method: str,
+            data: bytes | None = None,
+            content_type: str | None = None,
+        ) -> FakeResponse:
+            return FakeResponse('"etag"' if method == "PUT" else None)
+
+        with tempfile.TemporaryDirectory() as directory:
+            video = Path(directory) / "meeting.mp4"
+            video.write_bytes(b"video")
+            with (
+                patch.object(
+                    client,
+                    "_request",
+                    side_effect=[
+                        initialized,
+                        client.KommodoAPIError(
+                            409,
+                            {"error": "Upload already exists"},
+                            "Upload already exists",
+                        ),
+                    ],
+                ),
+                patch.object(client, "_storage_request", side_effect=storage_request),
+            ):
+                result = client.upload_video(video, concurrency=1)
+
+        self.assertEqual(
+            result,
+            {
+                "upload_id": "upload-id",
+                "recording_id": "recording-id",
+                "status": "processing",
+            },
+        )
 
     def test_upload_image_puts_file_into_initialized_url(self) -> None:
         initialized = {

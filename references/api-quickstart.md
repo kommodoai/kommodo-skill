@@ -1,6 +1,6 @@
 # Kommodo Public API v2 — Developer Quickstart
 
-Upload media; read recordings, transcripts, AI metadata, folders, and team members; update titles and create pages.
+Upload media; read recordings, transcripts, AI metadata, folders, and team members; update recordings and create Pages.
 
 **Base URL:** `https://kommodo.ai/api/public/v2`
 **Auth:** `Authorization: Bearer <token>`
@@ -14,7 +14,16 @@ Upload media; read recordings, transcripts, AI metadata, folders, and team membe
 2. Click **Generate token**. Choose `read` (default) or `read+write` for uploads and other write operations.
 3. Copy the token. Treat it like a password.
 
-Tokens are user-scoped. Team visibility follows the same live account and group policy as the dashboard; a solo token sees only the user's own recordings.
+API access requires an active paid account billed through Stripe. Tokens are user-scoped. Team visibility follows the same live account and group policy as the dashboard; a solo token sees only the user's own recordings.
+
+For a local Bash or Zsh session, set the token without placing it in shell history:
+
+```bash
+printf 'Paste your Kommodo API token: '
+IFS= read -r -s KOMMODO_API_TOKEN
+export KOMMODO_API_TOKEN
+printf '\n'
+```
 
 ---
 
@@ -23,8 +32,7 @@ Tokens are user-scoped. Team visibility follows the same live account and group 
 The pattern: keep a watermark of the last `created_at` you successfully processed, page forward from there, fetch transcripts by ID.
 
 ```python
-import os, time, requests
-from datetime import datetime, timezone
+import os, requests
 
 BASE = "https://kommodo.ai/api/public/v2"
 TOKEN = os.environ["KOMMODO_API_TOKEN"]
@@ -59,14 +67,18 @@ def fetch_transcript(recording_id: str):
 
 def run(since_iso: str):
     latest = since_iso
+    transcript_pending = False
     for rec in list_recordings(since_iso):
         transcript = fetch_transcript(rec["id"])
         if transcript is None:
+            transcript_pending = True
             continue
-        save(rec, transcript)              # your storage
+        save(rec, transcript)              # idempotent/upsert by recording id
         if rec["created_at"] > latest:
             latest = rec["created_at"]
-    return latest                          # persist this for next run
+    # Do not advance past a recording whose transcript is not ready. This may
+    # replay successful records on the next run, so save() must be idempotent.
+    return since_iso if transcript_pending else latest
 
 if __name__ == "__main__":
     last = load_watermark() or "2025-01-01T00:00:00Z"
@@ -75,6 +87,7 @@ if __name__ == "__main__":
 ```
 
 Run it under cron, GitHub Actions, or Cloud Scheduler. The same code works for daily and weekly cadences — just change how often you invoke it.
+`since` is inclusive, so the record at the watermark can appear again; deduplicate by recording id.
 
 ---
 
@@ -161,12 +174,12 @@ Returns `404` if no transcript exists yet (still processing or transcription dis
 
 | Method  | Path                                   | Purpose                                                                                                                                                   | Scope |
 | ------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
-| GET     | `/folders`                             | List owned and directly shared folders. `parent_id` scopes a level; `member_id` requires visibility to that member.                                      | read  |
+| GET     | `/folders`                             | Paginated owned/shared folders. Supports `parent_id`, `member_id`, `cursor`, and `limit` (default 20, max 100).                                          | read  |
 | POST    | `/folders`                             | Create under an owned `parent_id`, or under the caller's root when omitted.                                                                                | write |
 | PATCH   | `/folders/:id`                         | Rename a folder the caller owns or has full access to.                                                                                                    | write |
 | DELETE  | `/folders/:id`                         | Delete an empty non-root folder. Returns 409 instead of recursively deleting content.                                                                     | write |
 | GET     | `/team/members`                        | List the account roster. **Account-owner only**; other callers get 403.                                                                                   | read  |
-| PATCH   | `/recordings/:id`                      | Update `title`, `description`, `folder_id`.                                                                                                               | write |
+| PATCH   | `/recordings/:id`                      | Update `title`, `description`, `tags`, or `folder_id`.                                                                                                    | write |
 | POST    | `/recordings/:id/pages`                | Create a page from a recording.                                                                                                                           | write |
 | POST    | `/uploads`                             | Initialize an image or multipart-video upload.                                                                                                            | write |
 | POST    | `/uploads/:upload_id/complete`         | Queue a completed multipart video for processing.                                                                                                         | write |
@@ -193,6 +206,10 @@ curl -X DELETE -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
   "https://kommodo.ai/api/public/v2/folders/<folder-id>"
 ```
 
+Recording updates accept `title` (up to 500 characters), `description` (up to 5,000), `tags` (up to 32 non-empty strings of 64 characters each), and `folder_id`. Send `folder_id: null` to remove a recording from its folder.
+
+`POST /recordings/:id/pages` creates a draft unless `publish: true` is sent. Its response contains the Page id and published state, but not a public or custom-domain URL. Fetch `GET /recordings/:id` after creation for the canonical `urls.page`; the API does not currently return a custom-domain URL.
+
 ---
 
 ## 5. Upload files
@@ -213,7 +230,6 @@ Runnable references, with no repository clone:
 curl -fsS https://kommodo.ai/api-examples/upload-video.sh -o upload-video.sh
 less upload-video.sh
 chmod +x upload-video.sh
-export KOMMODO_API_TOKEN="<read+write token>"
 ./upload-video.sh /absolute/path/to/meeting.mp4
 
 # Dependency-free Node 20+ video uploader
@@ -225,7 +241,7 @@ Videos upload directly to signed storage URLs in the returned chunk size, so lar
 
 Images initialize through the same `POST /uploads` endpoint and then use the returned signed PUT URL. They do not require a separate completion call.
 
-The Skill also includes an optional Python implementation for agent workflows:
+The skill repository also includes an optional Python 3.9+ implementation for agent workflows:
 
 ```bash
 python3 scripts/client.py upload-video /absolute/path/to/meeting.mp4
@@ -233,7 +249,7 @@ python3 scripts/client.py upload-image /absolute/path/to/diagram.png \
   --width 1600 --height 900
 ```
 
-The API currently accepts local files only. Importing a Zoom, Dropbox, or other remote download URL is not supported.
+The API does not accept a Zoom, Dropbox, or other source URL directly. A custom integration can download or stream the remote file itself, then upload those bytes through this protocol.
 
 ### Direct initialization shapes
 
@@ -279,8 +295,10 @@ For incremental syncs, combine `since` with cursor traversal — the cursor hand
 | 404    | Recording or transcript not found.               | Skip and continue. Transcripts are not ready instantly.                                            |
 | 413    | Transcript exceeds 5 MB.                         | No transcript URL is exposed. Fall back to `GET /recordings/:id` and use `ai.summary`.             |
 | 409    | Folder is not empty.                             | Move child folders, recordings, guides, and restorable items in trash first. Do not recursively delete them. |
+| 409    | A Page or completed upload already exists.       | Do not create a duplicate. Fetch the recording state instead.                                      |
 | 429    | Request pacing limit reached.                    | Sleep `Retry-After` seconds. `X-RateLimit-Reset` is **seconds remaining**, not an epoch timestamp. |
-| 502    | Upstream transcript unreachable / malformed.     | Retry with exponential backoff. Skip the recording after 3.                                        |
+| 502    | Transcript or upload service temporarily failed. | Retry with exponential backoff.                                                                    |
+| 503    | Billing verification is temporarily unavailable. | Wait for `Retry-After`, then retry.                                                                 |
 | 5xx    | Other server error.                              | Retry with exponential backoff (start at 1s, cap at 60s).                                          |
 
 `GET /team/members` is restricted to account owners. The `member_id` parameter on
@@ -344,14 +362,16 @@ Video upload is not a single request. Use the complete cURL reference in [Upload
 
 ## 9. Using the API from an AI agent
 
-This document lives inside the Kommodo skill repo. If you use Claude Code, Cursor, Codex, or any agent that supports skills, install the skill instead of writing a client:
+For Claude Code, install the skill so the agent can load the API instructions and bundled helper:
 
 ```bash
 git clone https://github.com/kommodoai/kommodo-skill.git
 ./kommodo-skill/install.sh
 ```
 
-The skill wraps the same endpoints with tool definitions for uploads, recording retrieval and updates, Page creation, folder listing and writes, and team-member lookup. Auth is handled via `KOMMODO_API_TOKEN` in your environment. See `SKILL.md` in this repo for the full tool reference.
+The skill describes the same endpoints and includes Python helper functions for uploads, recording retrieval and updates, Page creation, folder listing and writes, and team-member lookup. Auth is handled via `KOMMODO_API_TOKEN` in your environment. See `SKILL.md` in this repo for the helper reference.
+
+Other agents and applications should call the same HTTP API directly. Agent Skills-compatible products may also load `SKILL.md`, but their installation path is product-specific; the included installer targets Claude Code.
 
 ---
 

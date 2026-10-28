@@ -57,6 +57,7 @@ def _request(
     params: dict[str, Any] | None = None,
     body: dict[str, Any] | None = None,
     accept: str = "application/json",
+    retry_server_errors: bool = False,
 ) -> Any:
     url = f"{_base_url()}{path}"
     if params:
@@ -75,8 +76,10 @@ def _request(
 
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
 
-    # One retry on 429 honouring Retry-After; one retry on transient 502.
-    for attempt in range(2):
+    # Ordinary calls get one retry on 429/502. Upload finalization opts into a
+    # third attempt for transient 5xx responses because its token is reusable.
+    attempts = 3 if retry_server_errors else 2
+    for attempt in range(attempts):
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 raw = resp.read()
@@ -90,12 +93,15 @@ def _request(
                 parsed_body = _json_loads(body_text)
             except Exception:
                 parsed_body = body_text
-            if e.code == 429 and attempt == 0:
+            can_retry = attempt < attempts - 1
+            if e.code == 429 and can_retry:
                 retry_after = int(e.headers.get("Retry-After", "5"))
                 time.sleep(min(retry_after, 60))
                 continue
-            if e.code == 502 and attempt == 0:
-                time.sleep(2)
+            if (
+                e.code == 502 or (retry_server_errors and e.code >= 500)
+            ) and can_retry:
+                time.sleep(attempt + 1)
                 continue
             message = (
                 parsed_body.get("error")
@@ -103,6 +109,11 @@ def _request(
                 else str(parsed_body)
             )
             raise KommodoAPIError(e.code, parsed_body, message or "request failed")
+        except urllib.error.URLError:
+            if retry_server_errors and attempt < attempts - 1:
+                time.sleep(attempt + 1)
+                continue
+            raise
     raise KommodoAPIError(0, None, "exhausted retries")
 
 
@@ -118,7 +129,7 @@ def _json_loads(s: str) -> Any:
     return json.loads(s)
 
 
-# ========= Read tools =========
+# ========= Read helpers =========
 
 
 def find_recordings(
@@ -164,6 +175,7 @@ def list_folders(
     parent_id: str | None = None,
     member_id: str | None = None,
     cursor: str | None = None,
+    limit: int = 20,
 ) -> dict[str, Any]:
     """
     {folders: [...], next_cursor: str | None}
@@ -179,6 +191,7 @@ def list_folders(
             "parent_id": parent_id,
             "member_id": member_id,
             "cursor": cursor,
+            "limit": limit,
         },
     )
 
@@ -188,7 +201,7 @@ def list_team_members() -> dict[str, Any]:
     return _request("GET", "/api/public/v2/team/members")
 
 
-# ========= Write tools (require read+write scope token) =========
+# ========= Write helpers (require read+write scope token) =========
 
 
 def update_recording(
@@ -292,6 +305,8 @@ def upload_video(
         raise ValueError("concurrency must be between 1 and 16")
 
     size = path.stat().st_size
+    if size < 1:
+        raise ValueError("Video file is empty")
     initialized = _request(
         "POST",
         "/api/public/v2/uploads",
@@ -303,84 +318,7 @@ def upload_video(
     if not providers or not isinstance(chunk_size, int) or chunk_size < 1:
         raise RuntimeError("Kommodo returned an invalid multipart upload contract")
 
-    provider = providers[0]
-    parts = provider.get("upload_parts") if isinstance(provider, dict) else None
     expected_parts = (size + chunk_size - 1) // chunk_size
-    if not isinstance(parts, list) or len(parts) != expected_parts:
-        raise RuntimeError("Kommodo returned an invalid multipart part list")
-
-    def put_part(index: int) -> dict[str, Any]:
-        part = parts[index]
-        if not isinstance(part, dict) or part.get("part_number") != index + 1:
-            raise RuntimeError("Kommodo returned unordered multipart parts")
-        offset = index * chunk_size
-        length = min(chunk_size, size - offset)
-        with path.open("rb") as source:
-            source.seek(offset)
-            payload = source.read(length)
-        if len(payload) != length:
-            raise OSError(f"Could not read upload part {index + 1}")
-
-        last_error: BaseException | None = None
-        for attempt in range(3):
-            try:
-                with _storage_request(
-                    part["url"],
-                    method="PUT",
-                    data=payload,
-                    content_type="application/octet-stream",
-                ) as response:
-                    etag = response.headers.get("ETag")
-                if not etag:
-                    raise RuntimeError("Storage response omitted ETag")
-                return {"part_number": part["part_number"], "etag": etag}
-            except (OSError, RuntimeError, urllib.error.URLError) as error:
-                last_error = error
-                if attempt < 2:
-                    time.sleep(attempt + 1)
-        raise RuntimeError(f"Upload part {index + 1} failed") from last_error
-
-    try:
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=min(concurrency, len(parts))
-        ) as pool:
-            completed_parts = []
-            for completed_part in pool.map(put_part, range(len(parts))):
-                completed_parts.append(completed_part)
-                if on_progress:
-                    on_progress(len(completed_parts), len(parts))
-    except Exception:
-        abort_url = provider.get("abort_url") if isinstance(provider, dict) else None
-        if isinstance(abort_url, str):
-            try:
-                with _storage_request(abort_url, method="DELETE"):
-                    pass
-            except Exception:
-                pass
-        raise
-
-    complete_url = provider.get("complete_url")
-    if not isinstance(complete_url, str):
-        raise RuntimeError("Kommodo omitted the multipart completion URL")
-    completion_xml = (
-        "<CompleteMultipartUpload>"
-        + "".join(
-            "<Part>"
-            f"<PartNumber>{part['part_number']}</PartNumber>"
-            f"<ETag>{escape(part['etag'])}</ETag>"
-            "</Part>"
-            for part in completed_parts
-        )
-        + "</CompleteMultipartUpload>"
-    ).encode("utf-8")
-    with _storage_request(
-        complete_url,
-        method="POST",
-        data=completion_xml,
-        content_type="application/xml",
-    ):
-        pass
-
     completion = initialized.get("completion")
     if not isinstance(completion, dict):
         raise RuntimeError("Kommodo omitted the upload completion grant")
@@ -388,11 +326,110 @@ def upload_video(
     completion_token = completion.get("token")
     if not isinstance(completion_path, str) or not isinstance(completion_token, str):
         raise RuntimeError("Kommodo returned an invalid upload completion grant")
-    return _request(
-        "POST",
-        completion_path,
-        body={"completion_token": completion_token},
-    )
+
+    last_provider_error: BaseException | None = None
+    for provider in providers:
+        parts = provider.get("upload_parts") if isinstance(provider, dict) else None
+        abort_url = provider.get("abort_url") if isinstance(provider, dict) else None
+
+        try:
+            if not isinstance(parts, list) or len(parts) != expected_parts:
+                raise RuntimeError("Kommodo returned an invalid multipart part list")
+
+            def put_part(index: int) -> dict[str, Any]:
+                part = parts[index]
+                if (
+                    not isinstance(part, dict)
+                    or part.get("part_number") != index + 1
+                ):
+                    raise RuntimeError("Kommodo returned unordered multipart parts")
+                offset = index * chunk_size
+                length = min(chunk_size, size - offset)
+                with path.open("rb") as source:
+                    source.seek(offset)
+                    payload = source.read(length)
+                if len(payload) != length:
+                    raise OSError(f"Could not read upload part {index + 1}")
+
+                last_error: BaseException | None = None
+                for attempt in range(3):
+                    try:
+                        with _storage_request(
+                            part["url"],
+                            method="PUT",
+                            data=payload,
+                            content_type="application/octet-stream",
+                        ) as response:
+                            etag = response.headers.get("ETag")
+                        if not etag:
+                            raise RuntimeError("Storage response omitted ETag")
+                        return {"part_number": part["part_number"], "etag": etag}
+                    except (OSError, RuntimeError, urllib.error.URLError) as error:
+                        last_error = error
+                        if attempt < 2:
+                            time.sleep(attempt + 1)
+                raise RuntimeError(f"Upload part {index + 1} failed") from last_error
+
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(concurrency, len(parts))
+            ) as pool:
+                completed_parts = []
+                for completed_part in pool.map(put_part, range(len(parts))):
+                    completed_parts.append(completed_part)
+                    if on_progress:
+                        on_progress(len(completed_parts), len(parts))
+
+            complete_url = provider.get("complete_url")
+            if not isinstance(complete_url, str):
+                raise RuntimeError("Kommodo omitted the multipart completion URL")
+            completion_xml = (
+                "<CompleteMultipartUpload>"
+                + "".join(
+                    "<Part>"
+                    f"<PartNumber>{part['part_number']}</PartNumber>"
+                    f"<ETag>{escape(part['etag'])}</ETag>"
+                    "</Part>"
+                    for part in completed_parts
+                )
+                + "</CompleteMultipartUpload>"
+            ).encode("utf-8")
+            with _storage_request(
+                complete_url,
+                method="POST",
+                data=completion_xml,
+                content_type="application/xml",
+            ):
+                pass
+            break
+        except Exception as error:
+            last_provider_error = error
+            if isinstance(abort_url, str):
+                try:
+                    with _storage_request(abort_url, method="DELETE"):
+                        pass
+                except Exception:
+                    pass
+    else:
+        raise RuntimeError("Every storage provider failed") from last_provider_error
+
+    try:
+        return _request(
+            "POST",
+            completion_path,
+            body={"completion_token": completion_token},
+            retry_server_errors=True,
+        )
+    except KommodoAPIError as error:
+        # A lost success response can make the safe retry return 409 because
+        # the recording already exists. That is a completed finalization, not
+        # a reason to upload the bytes again.
+        if error.status == 409:
+            return {
+                "upload_id": initialized.get("upload_id"),
+                "recording_id": initialized.get("recording_id"),
+                "status": "processing",
+            }
+        raise
 
 
 def upload_image(
@@ -409,6 +446,8 @@ def upload_image(
         raise ValueError(f"Image file not found: {path}")
     if width < 1 or height < 1:
         raise ValueError("width and height must be positive integers")
+    if path.stat().st_size < 1:
+        raise ValueError("Image file is empty")
     resolved_type = content_type or mimetypes.guess_type(path.name)[0]
     if resolved_type not in {"image/jpeg", "image/png", "image/gif", "image/webp"}:
         raise ValueError(

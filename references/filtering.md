@@ -34,6 +34,7 @@ are supplied.
 | `parent_id` | string | Folder children of this id. Pass `""` for root.                                                                      |
 | `member_id` | uid    | Folders owned by this uid. The caller must have team-content visibility for that member. Useful for the team→member→folders walk. |
 | `cursor`    | opaque | From previous `next_cursor`.                                                                                          |
+| `limit`     | int 1..100 | Default 20.                                                                                                       |
 
 ## Recipes
 
@@ -77,13 +78,20 @@ Calling `list_folders(member_id=…)` requires team-content visibility for Alice
 
 ```
 last_seen = stored_timestamp
-batch = find_recordings(since=last_seen)
-while batch.next_cursor:
-    process(batch.recordings)
-    batch = find_recordings(since=last_seen, cursor=batch.next_cursor)
-process(batch.recordings)
-stored_timestamp = max(r.created_at for r in all_batches)
+cursor = None
+seen = []
+while True:
+    batch = find_recordings(since=last_seen, cursor=cursor)
+    process_idempotently(batch["recordings"])  # dedupe by recording id
+    seen.extend(batch["recordings"])
+    cursor = batch["next_cursor"]
+    if not cursor:
+        break
+if seen:
+    stored_timestamp = max(r["created_at"] for r in seen)
 ```
 
 `since` filters `created_at`; it is not a change feed. It will not return an
 older recording merely because that recording was renamed, moved, or updated.
+The bound is inclusive, so the recording at `stored_timestamp` can be returned
+again on the next run.

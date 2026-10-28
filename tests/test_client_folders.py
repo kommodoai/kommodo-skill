@@ -11,6 +11,26 @@ import client
 
 
 class FolderClientTests(unittest.TestCase):
+    def test_folder_list_passes_every_public_filter(self) -> None:
+        with patch.object(client, "_request", return_value={}) as request:
+            client.list_folders(
+                parent_id="parent",
+                member_id="member",
+                cursor="cursor",
+                limit=50,
+            )
+
+        request.assert_called_once_with(
+            "GET",
+            "/api/public/v2/folders",
+            params={
+                "parent_id": "parent",
+                "member_id": "member",
+                "cursor": "cursor",
+                "limit": 50,
+            },
+        )
+
     def test_folder_writes_use_the_public_contract(self) -> None:
         with patch.object(client, "_request", return_value={}) as request:
             client.create_folder("Customer calls")

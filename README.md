@@ -1,6 +1,6 @@
 # kommodo-skill
 
-A [Claude Code](https://docs.claude.com/en/docs/claude-code) skill that wraps the [Kommodo](https://kommodo.ai) public API. Ask the agent to upload a local video or for "recordings from last week on Acme" — it handles multipart uploads, search, AI summaries, transcripts, renaming, retagging, and publishing recordings as pages.
+A [Claude Code skill](https://code.claude.com/docs/en/skills) with optional Python helpers for the [Kommodo](https://kommodo.ai) public API. Ask Claude to upload a local video or for "recordings from last week on Acme" — the skill tells it how to use the API for uploads, title search, AI summaries, transcripts, folders, recording updates, and Pages.
 
 We are actively working on this API. Feedback is welcome! feedback@kommodo.ai 
 
@@ -8,9 +8,9 @@ We are actively working on this API. Feedback is welcome! feedback@kommodo.ai
 
 ## What you get
 
-Named tools backed by the public API:
+The skill can use these helper functions from `scripts/client.py`:
 
-| Tool | What it does |
+| Helper | What it does |
 |---|---|
 | `find_recordings` | Paginated list with filters (date range, title, team member, folder, has-page) |
 | `get_recording` | Full envelope including AI summary, chapters, action items |
@@ -21,11 +21,11 @@ Named tools backed by the public API:
 | `delete_folder` | Delete an empty non-root folder (write scope) |
 | `list_team_members` | Team owner + member list (team-owner-only) |
 | `update_recording` | Rename, retag, update description, move folder (write scope) |
-| `create_page` | Convert a recording into a published page (write scope) |
+| `create_page` | Create a draft Page, or publish it when requested (write scope) |
 | `upload_video` | Multipart-upload a local video and queue processing (write scope) |
 | `upload_image` | Upload a local image to the image library (write scope) |
 
-See [`SKILL.md`](SKILL.md) for the full tool reference, [`references/`](references/) for response schemas and filter recipes.
+See [`SKILL.md`](SKILL.md) for the full helper reference, [`references/`](references/) for response schemas and filter recipes.
 
 Integrating without an agent (cron jobs, ETL, plain HTTP)? Start at [`references/api-quickstart.md`](references/api-quickstart.md) — Python sample for nightly transcript sync, full endpoint and error tables.
 
@@ -46,6 +46,7 @@ Variations:
 ```bash
 ./install.sh --copy                # copy files instead of symlink
 ./install.sh --project ./my-app    # install into my-app/.claude/skills/kommodo
+./install.sh --force               # replace an existing installation
 ./install.sh --help
 ```
 
@@ -61,27 +62,35 @@ ln -s ~/kommodo-skill ~/.claude/skills/kommodo
 
 ```bash
 cd your-project
-mkdir -p .claude/skills
-git clone https://github.com/kommodoai/kommodo-skill.git .claude/skills/kommodo
+git clone https://github.com/kommodoai/kommodo-skill.git ../kommodo-skill
+../kommodo-skill/install.sh --copy --project .
 git add .claude/skills/kommodo
 git commit -m "Add Kommodo skill for Claude Code"
 ```
+
+This commits ordinary files, not a nested Git repository. Teammates receive the skill with the project.
+
+The installer targets local Claude Code sessions. Cloud sessions do not read your local `~/.claude/skills`; enable the skill for your Claude account or add it to the cloud environment using that product's skill settings.
 
 ---
 
 ## Setup
 
-1. **Generate an API token** at https://kommodo.ai/account?tab=api. Pick scope:
+1. **Generate an API token** at https://kommodo.ai/account?tab=api. API access requires an active paid account billed through Stripe. Pick scope:
    - **Read** — search / summaries / transcripts
    - **Read + write** — plus file uploads, folder changes, rename, retag, move, create-page
 
-2. **Export it** in your shell profile:
+2. **Export it** before launching Claude Code. For a local terminal, read it without placing it in shell history:
    ```bash
-   echo 'export KOMMODO_API_TOKEN="<paste from /account?tab=api>"' >> ~/.zshrc
-   source ~/.zshrc
+   printf 'Paste your Kommodo API token: '
+   IFS= read -r -s KOMMODO_API_TOKEN
+   export KOMMODO_API_TOKEN
+   printf '\n'
    ```
 
-3. **Restart Claude Code** fully (quit, not just reload) so it picks up the new skill.
+   This lasts for that terminal session. Claude Code Desktop and cloud sessions have separate environment settings; set `KOMMODO_API_TOKEN` there instead of assuming they inherit your terminal. Never commit the token.
+
+3. **Start a new Claude Code session** so it inherits the token. If the skill directory was created while a session was already open and `/kommodo` is not listed, run `/reload-skills`.
 
 4. **Try it.** Ask Claude: *"List my five most recent Kommodo recordings."*
 
@@ -89,10 +98,9 @@ git commit -m "Add Kommodo skill for Claude Code"
 
 ## Verify
 
-No Claude Code handy? Call the client directly:
+No Claude Code handy? From the cloned skill directory, call the client directly with Python 3.9 or newer:
 
 ```bash
-export KOMMODO_API_TOKEN="..."
 python3 -c "
 import sys
 sys.path.insert(0, 'scripts')
@@ -149,7 +157,7 @@ and Kommodo finalization. `scripts/client.py` is only one optional implementatio
 cd path/to/kommodo-skill && git pull
 ```
 
-If you used `./install.sh --copy` instead of symlink, re-run the installer after pulling.
+If you used `./install.sh --copy` instead of symlink, re-run the installer with `--copy --force` after pulling.
 
 ---
 
@@ -161,7 +169,7 @@ Tagged releases follow [semver](https://semver.org). Pin to a tag if you need st
 git clone --branch v0.1.0 https://github.com/kommodoai/kommodo-skill.git
 ```
 
-Breaking changes get a major bump. Additive changes (new tools, new optional params) are minor. Bug fixes are patch.
+Breaking changes get a major bump. Additive changes (new helpers, new optional params) are minor. Bug fixes are patch.
 
 ---
 
@@ -173,7 +181,8 @@ Breaking changes get a major bump. Additive changes (new tools, new optional par
 | `401 Unauthorized` | token invalid, revoked, or for another environment | Regenerate at `/account?tab=api`. Verify `KOMMODO_API_BASE_URL` matches the token's environment. |
 | `403 Write scope required` | Read-scoped token used for a write endpoint | Regenerate with the **Read + write** toggle |
 | `429 Too Many Requests` | Current request pacing limit reached | Honor `Retry-After` and `X-RateLimit-Reset`; do not hard-code a quota |
-| Skill not detected | Claude Code didn't rescan `~/.claude/skills/` | Fully quit and relaunch |
+| `403 Premium subscription required` | API access is unavailable for this account | Confirm the account has active Stripe-backed paid access |
+| Skill not detected | Claude Code did not watch a newly created skills directory | Run `/reload-skills`; restart only if it still does not appear |
 
 ---
 
