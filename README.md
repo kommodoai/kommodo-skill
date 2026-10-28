@@ -98,14 +98,18 @@ print(find_recordings(limit=3))
 "
 ```
 
-Upload a video without an agent:
+The Skill's Python adapter is optional. If you want it, it can upload a video
+without an agent:
 
 ```bash
 python3 scripts/client.py upload-video /absolute/path/to/meeting.mp4
 ```
 
-The command returns the new `recording_id` with `status: processing`. See the
-[API quickstart](references/api-quickstart.md#5-upload-files) for images and the underlying HTTP contract.
+The command returns the new `recording_id` with `status: processing`. Developers
+using JavaScript, Go, Ruby, PHP, Java, cURL, or another HTTP client do not need
+this repository. The canonical [public upload guide](https://kommodo.ai/developer#uploads)
+documents the language-neutral protocol and provides complete cURL and Node
+references.
 
 ---
 
@@ -120,16 +124,19 @@ The command returns the new `recording_id` with `status: processing`. See the
 
 ## HTTP API direct
 
-The skill is an optional wrapper — the HTTP API is the real contract. Every tool call resolves to one HTTP request you can make yourself:
+The skill is an optional wrapper — the HTTP API is the real contract:
 
 ```bash
 curl -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
      "https://kommodo.ai/api/public/v2/recordings?limit=5"
 ```
 
-Full endpoint reference: https://kommodo.ai/account?tab=api
+Public endpoint and upload reference: https://kommodo.ai/developer
 
-Video upload is the exception to the one-request pattern: bytes go directly to signed storage URLs in multiple parts. Use `scripts/client.py upload-video` or follow the multipart contract in the quickstart.
+Video upload is a sequence of standard HTTP requests because bytes go directly
+to signed storage URLs in multiple parts. The public guide documents every
+request and response, including retries, ETags, provider completion, aborts,
+and Kommodo finalization. `scripts/client.py` is only one optional implementation.
 
 ---
 

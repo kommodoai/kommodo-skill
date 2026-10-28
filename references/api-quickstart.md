@@ -170,24 +170,41 @@ Write endpoints require a `read+write` scope token and apply the same access rul
 
 ## 5. Upload files
 
-Clone this repository and use the maintained client so your integration does not have to implement signed multipart storage requests:
+Upload is a language-neutral HTTP contract. You do not need Python, this repository, or a Kommodo SDK. The canonical [public upload guide](https://kommodo.ai/developer#uploads) documents the complete request and response schemas and provides tested cURL and dependency-free Node references.
+
+The high-level flow is:
+
+1. Initialize `POST /uploads` with a read+write Bearer token.
+2. Send image or video bytes directly to the returned signed storage URLs **without** the Bearer token.
+3. For video, retain each part response's `ETag`, POST ordered `CompleteMultipartUpload` XML to the selected provider's `complete_url`, then POST the returned `completion_token` to `/uploads/:upload_id/complete` with the Bearer token.
+4. Poll `GET /recordings/:recording_id`. A temporary 404 is expected before processing creates the recording.
+
+Runnable references, with no repository clone:
 
 ```bash
-git clone https://github.com/kommodoai/kommodo-skill.git
-cd kommodo-skill
-export KOMMODO_API_TOKEN="..."
+# Complete cURL + jq video uploader
+curl -fsS https://kommodo.ai/api-examples/upload-video.sh -o upload-video.sh
+less upload-video.sh
+chmod +x upload-video.sh
+export KOMMODO_API_TOKEN="<read+write token>"
+./upload-video.sh /absolute/path/to/meeting.mp4
 
-# Local video; returns upload_id, recording_id, and status=processing
+# Dependency-free Node 20+ video uploader
+curl -fsS https://kommodo.ai/api-examples/upload-video.mjs -o upload-video.mjs
+node upload-video.mjs /absolute/path/to/meeting.mp4
+```
+
+Videos upload directly to signed storage URLs in the returned chunk size, so large files do not pass through the dashboard service. Retry transient part failures. If one provider fails, call its `abort_url` and restart the whole file against the next provider. Finish before `expires_in_seconds`; otherwise initialize a new upload.
+
+Images initialize through the same `POST /uploads` endpoint and then use the returned signed PUT URL. They do not require a separate completion call.
+
+The Skill also includes an optional Python implementation for agent workflows:
+
+```bash
 python3 scripts/client.py upload-video /absolute/path/to/meeting.mp4
-
-# Local image; dimensions are part of the API contract
 python3 scripts/client.py upload-image /absolute/path/to/diagram.png \
   --width 1600 --height 900
 ```
-
-Videos upload directly to signed storage URLs in 5 MiB parts, so large files do not pass through the dashboard service. The client initializes `POST /uploads`, uploads and completes one returned storage provider, then calls the returned `/complete` URL. Processing is asynchronous: poll `GET /recordings/:recording_id`; a temporary 404 is expected before the recording is created.
-
-Images initialize through the same `POST /uploads` endpoint and then use the returned signed PUT URL. They do not require a separate completion call.
 
 The API currently accepts local files only. Importing a Zoom, Dropbox, or other remote download URL is not supported.
 
@@ -294,7 +311,7 @@ curl -X PATCH -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
   "https://kommodo.ai/api/public/v2/recordings/<id>"
 ```
 
-Video upload is not a single curl request. Use the maintained Python client shown in [Upload files](#5-upload-files), or implement the multipart response contract directly.
+Video upload is not a single request. Use the complete cURL reference in [Upload files](#5-upload-files), the dependency-free Node reference, or implement the documented multipart contract in your language.
 
 ---
 
