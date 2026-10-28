@@ -8,13 +8,19 @@ Raises KommodoAPIError on non-2xx responses with status + parsed body.
 
 from __future__ import annotations
 
+import argparse
+import concurrent.futures
+import json
+import mimetypes
 import os
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Literal
-
+from pathlib import Path
+from typing import Any, Callable, Literal
+from xml.sax.saxutils import escape
 
 DEFAULT_BASE = "https://kommodo.ai"
 
@@ -27,7 +33,9 @@ class KommodoAPIError(RuntimeError):
 
 
 def _base_url() -> str:
-    base = os.environ.get("KOMMODO_API_BASE_URL") or os.environ.get("KOMODO_API_BASE_URL")
+    base = os.environ.get("KOMMODO_API_BASE_URL") or os.environ.get(
+        "KOMODO_API_BASE_URL"
+    )
     return (base or DEFAULT_BASE).rstrip("/")
 
 
@@ -234,6 +242,191 @@ def create_page(
     )
 
 
+def _storage_request(
+    url: str,
+    *,
+    method: str,
+    data: bytes | None = None,
+    content_type: str | None = None,
+) -> Any:
+    headers = {"Content-Type": content_type} if content_type else {}
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers=headers,
+    )
+    return urllib.request.urlopen(request, timeout=120)
+
+
+def upload_video(
+    file_path: str | os.PathLike[str],
+    *,
+    title: str | None = None,
+    concurrency: int = 4,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> dict[str, Any]:
+    """Upload a local video and queue it for processing."""
+    path = Path(file_path)
+    if not path.is_file():
+        raise ValueError(f"Video file not found: {path}")
+    if concurrency < 1 or concurrency > 16:
+        raise ValueError("concurrency must be between 1 and 16")
+
+    size = path.stat().st_size
+    initialized = _request(
+        "POST",
+        "/api/public/v2/uploads",
+        body={"type": "video", "title": title or path.name, "size_bytes": size},
+    )
+    upload = initialized.get("upload") if isinstance(initialized, dict) else None
+    providers = upload.get("providers") if isinstance(upload, dict) else None
+    chunk_size = upload.get("chunk_size_bytes") if isinstance(upload, dict) else None
+    if not providers or not isinstance(chunk_size, int) or chunk_size < 1:
+        raise RuntimeError("Kommodo returned an invalid multipart upload contract")
+
+    provider = providers[0]
+    parts = provider.get("upload_parts") if isinstance(provider, dict) else None
+    expected_parts = (size + chunk_size - 1) // chunk_size
+    if not isinstance(parts, list) or len(parts) != expected_parts:
+        raise RuntimeError("Kommodo returned an invalid multipart part list")
+
+    def put_part(index: int) -> dict[str, Any]:
+        part = parts[index]
+        if not isinstance(part, dict) or part.get("part_number") != index + 1:
+            raise RuntimeError("Kommodo returned unordered multipart parts")
+        offset = index * chunk_size
+        length = min(chunk_size, size - offset)
+        with path.open("rb") as source:
+            source.seek(offset)
+            payload = source.read(length)
+        if len(payload) != length:
+            raise OSError(f"Could not read upload part {index + 1}")
+
+        last_error: BaseException | None = None
+        for attempt in range(3):
+            try:
+                with _storage_request(
+                    part["url"],
+                    method="PUT",
+                    data=payload,
+                    content_type="application/octet-stream",
+                ) as response:
+                    etag = response.headers.get("ETag")
+                if not etag:
+                    raise RuntimeError("Storage response omitted ETag")
+                return {"part_number": part["part_number"], "etag": etag}
+            except (OSError, RuntimeError, urllib.error.URLError) as error:
+                last_error = error
+                if attempt < 2:
+                    time.sleep(attempt + 1)
+        raise RuntimeError(f"Upload part {index + 1} failed") from last_error
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(concurrency, len(parts))
+        ) as pool:
+            completed_parts = []
+            for completed_part in pool.map(put_part, range(len(parts))):
+                completed_parts.append(completed_part)
+                if on_progress:
+                    on_progress(len(completed_parts), len(parts))
+    except Exception:
+        abort_url = provider.get("abort_url") if isinstance(provider, dict) else None
+        if isinstance(abort_url, str):
+            try:
+                with _storage_request(abort_url, method="DELETE"):
+                    pass
+            except Exception:
+                pass
+        raise
+
+    complete_url = provider.get("complete_url")
+    if not isinstance(complete_url, str):
+        raise RuntimeError("Kommodo omitted the multipart completion URL")
+    completion_xml = (
+        "<CompleteMultipartUpload>"
+        + "".join(
+            "<Part>"
+            f"<PartNumber>{part['part_number']}</PartNumber>"
+            f"<ETag>{escape(part['etag'])}</ETag>"
+            "</Part>"
+            for part in completed_parts
+        )
+        + "</CompleteMultipartUpload>"
+    ).encode("utf-8")
+    with _storage_request(
+        complete_url,
+        method="POST",
+        data=completion_xml,
+        content_type="application/xml",
+    ):
+        pass
+
+    completion = initialized.get("completion")
+    if not isinstance(completion, dict):
+        raise RuntimeError("Kommodo omitted the upload completion grant")
+    completion_path = completion.get("url")
+    completion_token = completion.get("token")
+    if not isinstance(completion_path, str) or not isinstance(completion_token, str):
+        raise RuntimeError("Kommodo returned an invalid upload completion grant")
+    return _request(
+        "POST",
+        completion_path,
+        body={"completion_token": completion_token},
+    )
+
+
+def upload_image(
+    file_path: str | os.PathLike[str],
+    *,
+    width: int,
+    height: int,
+    title: str | None = None,
+    content_type: str | None = None,
+) -> dict[str, Any]:
+    """Upload a local image to the authenticated user's image library."""
+    path = Path(file_path)
+    if not path.is_file():
+        raise ValueError(f"Image file not found: {path}")
+    if width < 1 or height < 1:
+        raise ValueError("width and height must be positive integers")
+    resolved_type = content_type or mimetypes.guess_type(path.name)[0]
+    if resolved_type not in {"image/jpeg", "image/png", "image/gif", "image/webp"}:
+        raise ValueError(
+            "content_type must be image/jpeg, image/png, image/gif, or image/webp"
+        )
+
+    initialized = _request(
+        "POST",
+        "/api/public/v2/uploads",
+        body={
+            "type": "image",
+            "title": title or path.name,
+            "size_bytes": path.stat().st_size,
+            "content_type": resolved_type,
+            "width": width,
+            "height": height,
+        },
+    )
+    upload = initialized.get("upload") if isinstance(initialized, dict) else None
+    upload_url = upload.get("url") if isinstance(upload, dict) else None
+    if not isinstance(upload_url, str):
+        raise RuntimeError("Kommodo returned an invalid image upload contract")
+    with _storage_request(
+        upload_url,
+        method="PUT",
+        data=path.read_bytes(),
+        content_type=resolved_type,
+    ):
+        pass
+    return {
+        "upload_id": initialized.get("upload_id"),
+        "type": "image",
+        "status": "uploaded",
+    }
+
+
 # ========= Convenience helpers =========
 
 
@@ -249,3 +442,51 @@ def iter_all_recordings(
         cursor = batch.get("next_cursor")
         if not cursor:
             return out
+
+
+def _main() -> None:
+    parser = argparse.ArgumentParser(description="Kommodo public API client")
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    video = commands.add_parser("upload-video", help="Upload a local video")
+    video.add_argument("file")
+    video.add_argument("--title")
+    video.add_argument("--concurrency", type=int, default=4)
+
+    image = commands.add_parser("upload-image", help="Upload a local image")
+    image.add_argument("file")
+    image.add_argument("--width", type=int, required=True)
+    image.add_argument("--height", type=int, required=True)
+    image.add_argument("--title")
+    image.add_argument("--content-type")
+
+    args = parser.parse_args()
+    if args.command == "upload-video":
+
+        def show_progress(completed: int, total: int) -> None:
+            print(
+                f"\ruploaded {completed}/{total} parts",
+                end="\n" if completed == total else "",
+                file=sys.stderr,
+                flush=True,
+            )
+
+        result = upload_video(
+            args.file,
+            title=args.title,
+            concurrency=args.concurrency,
+            on_progress=show_progress,
+        )
+    else:
+        result = upload_image(
+            args.file,
+            width=args.width,
+            height=args.height,
+            title=args.title,
+            content_type=args.content_type,
+        )
+    print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    _main()

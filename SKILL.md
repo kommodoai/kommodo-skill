@@ -2,8 +2,8 @@
 name: kommodo
 description: >
   Work with Kommodo recordings via the public v2 API. Search/filter the user's
-  team recordings, read AI-generated summaries and transcripts, rename or
-  retag recordings, and convert a recording into a published page. Invoke
+  team recordings, upload local videos or images, read AI-generated summaries
+  and transcripts, rename or retag recordings, and convert a recording into a published page. Invoke
   when the user asks about their Kommodo videos, asks to summarize work done
   on a project from recordings, or asks to rename/retag/publish a recording.
 ---
@@ -18,9 +18,10 @@ Trigger this skill when the user asks to:
 - **Read a transcript** or **summarize work** captured in one or more recordings (for weekly digests, per-client reports, retrospective notes)
 - **Rename or retag** a recording, or move it to a different folder
 - **Create a published page** from a recording
+- **Upload a local video or image** into the user's Kommodo account
 - Answer questions like "what did we do for Client X this week?" by aggregating recording metadata
 
-Do NOT invoke this skill for: account billing, admin console actions, video upload (there's no upload endpoint here), video editing, deleting recordings (no delete endpoint yet).
+Do NOT invoke this skill for: account billing, admin console actions, importing media from a remote URL, video editing, deleting recordings (no delete endpoint yet).
 
 ## Authentication
 
@@ -29,11 +30,11 @@ All requests require a Bearer token issued from `https://kommodo.ai/account?tab=
 Scopes:
 
 - **read** — default. List, detail, transcript, folders, team members.
-- **read+write** — rename, retag, move, create-page. Issued explicitly via the UI's "Read + write" toggle.
+- **read+write** — upload, rename, retag, move, create-page. Issued explicitly via the UI's "Read + write" toggle.
 
 Store the token in `KOMMODO_API_TOKEN` env var. The scripts in `scripts/client.py` read this at call time; never interpolate the token into a prompt.
 
-## The 7 tools
+## The 9 tools
 
 All tools are thin Python wrappers around the HTTP API in `scripts/client.py`. They return native Python dicts for composition by the agent. Full response schemas are in `references/recording-envelope.md`.
 
@@ -67,6 +68,10 @@ All tools are thin Python wrappers around the HTTP API in `scripts/client.py`. T
 
 7. `create_page(recording_id, headline=None, description=None, publish=False, template_id=None)` — converts a recording into a page (draft by default). Returns `{page: {id, published, template_id}, recording_id}`. Fails with 409 if the recording already has a page.
 
+8. `upload_video(file_path, title=None, concurrency=4)` — uploads a local video directly to Kommodo storage using the API's multipart contract, then queues processing. Returns `{upload_id, recording_id, status: "processing"}`. The path must refer to a file the user has authorized the agent to upload.
+
+9. `upload_image(file_path, width, height, title=None, content_type=None)` — uploads a local JPEG, PNG, GIF, or WebP to the user's image library. Width and height are required by the API; determine them from the source image rather than guessing.
+
 ## Composition patterns (read this before multi-step work)
 
 **Summarize a project's recent work:**
@@ -95,6 +100,16 @@ find_recordings(since=last_poll_timestamp_iso, cursor=None) then loop cursor unt
 
 Envelopes include `created_at` and `updated_at`. Store the highest `created_at` seen, use it as `since` next time.
 
+**Upload a local video:**
+
+```
+upload_video("/absolute/path/to/meeting.mp4")
+  → report the returned recording_id and that processing continues asynchronously
+  → use get_recording(recording_id) later; 404 is expected until processing creates the recording
+```
+
+The upload tools accept local files only. They do not download Zoom, Dropbox, or other remote URLs.
+
 ## Errors
 
 | Code | Meaning                                               | Action                                                                                                        |
@@ -114,4 +129,5 @@ Envelopes include `created_at` and `updated_at`. Store the highest `created_at` 
 - **Never present an ID field as prose.** When referring to a recording, include its `title` first and the `id` parenthetical.
 - **Never expose the transcript URL in output** — it's auth-gated. Either summarize or quote cues with timestamps.
 - **For write actions, always state what you will do before doing it** (`"I'm going to rename 'Sprint Review 4/12' to 'Sprint Review — Acme launch'; proceed?"`) and wait for user confirmation, unless the user has already explicitly given scope-specific instructions in the same turn.
+- **Never upload an inferred file.** Use only the exact local path the user supplied or explicitly selected, and state the filename before starting the transfer.
 - **On 429, do not silently retry in a tight loop.** Wait the `Retry-After` seconds the server sends.

@@ -1,6 +1,6 @@
 # kommodo-skill
 
-A [Claude Code](https://docs.claude.com/en/docs/claude-code) skill that wraps the [Kommodo](https://kommodo.ai) public API. Ask the agent for "recordings from last week on Acme" and it composes the HTTP calls for you — search, read AI summaries, download transcripts, rename, retag, and publish recordings as pages.
+A [Claude Code](https://docs.claude.com/en/docs/claude-code) skill that wraps the [Kommodo](https://kommodo.ai) public API. Ask the agent to upload a local video or for "recordings from last week on Acme" — it handles multipart uploads, search, AI summaries, transcripts, renaming, retagging, and publishing recordings as pages.
 
 We are actively working on this API. Feedback is welcome! feedback@kommodo.ai 
 
@@ -8,7 +8,7 @@ We are actively working on this API. Feedback is welcome! feedback@kommodo.ai
 
 ## What you get
 
-Seven named tools the agent can invoke by name, each mapped 1:1 to an HTTP endpoint:
+Nine named tools backed by the public API:
 
 | Tool | What it does |
 |---|---|
@@ -19,6 +19,8 @@ Seven named tools the agent can invoke by name, each mapped 1:1 to an HTTP endpo
 | `list_team_members` | Team owner + member list (team-owner-only) |
 | `update_recording` | Rename, retag, update description, move folder (write scope) |
 | `create_page` | Convert a recording into a published page (write scope) |
+| `upload_video` | Multipart-upload a local video and queue processing (write scope) |
+| `upload_image` | Upload a local image to the image library (write scope) |
 
 See [`SKILL.md`](SKILL.md) for the full tool reference, [`references/`](references/) for response schemas and filter recipes.
 
@@ -68,7 +70,7 @@ git commit -m "Add Kommodo skill for Claude Code"
 
 1. **Generate an API token** at https://kommodo.ai/account?tab=api. Pick scope:
    - **Read** — search / summaries / transcripts
-   - **Read + write** — plus rename, retag, move, create-page
+   - **Read + write** — plus file uploads, rename, retag, move, create-page
 
 2. **Export it** in your shell profile:
    ```bash
@@ -96,6 +98,15 @@ print(find_recordings(limit=3))
 "
 ```
 
+Upload a video without an agent:
+
+```bash
+python3 scripts/client.py upload-video /absolute/path/to/meeting.mp4
+```
+
+The command returns the new `recording_id` with `status: processing`. See the
+[API quickstart](references/api-quickstart.md#5-upload-files) for images and the underlying HTTP contract.
+
 ---
 
 ## Environment variables
@@ -117,6 +128,8 @@ curl -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
 ```
 
 Full endpoint reference: https://kommodo.ai/account?tab=api
+
+Video upload is the exception to the one-request pattern: bytes go directly to signed storage URLs in multiple parts. Use `scripts/client.py upload-video` or follow the multipart contract in the quickstart.
 
 ---
 

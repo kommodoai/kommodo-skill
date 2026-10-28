@@ -1,6 +1,6 @@
 # Kommodo Public API v2 — Developer Quickstart
 
-Read recordings, transcripts, AI metadata, folders, and team members. Update titles and create pages.
+Upload media; read recordings, transcripts, AI metadata, folders, and team members; update titles and create pages.
 
 **Base URL:** `https://kommodo.ai/api/public/v2`
 **Auth:** `Authorization: Bearer <token>`
@@ -11,7 +11,7 @@ Read recordings, transcripts, AI metadata, folders, and team members. Update tit
 ## 1. Get a token
 
 1. Sign in at https://kommodo.ai and open **Account → API**.
-2. Click **Generate token**. Choose `read` (default) or `read+write` scope.
+2. Click **Generate token**. Choose `read` (default) or `read+write` for uploads and other write operations.
 3. Copy the token. It is shown once. Treat it like a password.
 
 Tokens are user-scoped. A team-owner token with an active premium subscription sees all team members' recordings; a solo token sees only the user's own recordings.
@@ -161,12 +161,58 @@ Returns `404` if no transcript exists yet (still processing or transcription dis
 | GET     | `/team/members`                        | List team members. **Team-owner + active premium only**; every other caller gets 403.                                                                     | read  |
 | PATCH   | `/recordings/:id`                      | Update `title`, `description`, `folder_id`.                                                                                                               | write |
 | POST    | `/recordings/:id/pages`                | Create a page from a recording.                                                                                                                           | write |
+| POST    | `/uploads`                             | Initialize an image or multipart-video upload.                                                                                                            | write |
+| POST    | `/uploads/:upload_id/complete`         | Queue a completed multipart video for processing.                                                                                                         | write |
 
 Write endpoints require a `read+write` scope token and apply the same access rules as the dashboard (owner, or `fullAccess` on the parent folder).
 
 ---
 
-## 5. Pagination
+## 5. Upload files
+
+Clone this repository and use the maintained client so your integration does not have to implement signed multipart storage requests:
+
+```bash
+git clone https://github.com/kommodoai/kommodo-skill.git
+cd kommodo-skill
+export KOMMODO_API_TOKEN="..."
+
+# Local video; returns upload_id, recording_id, and status=processing
+python3 scripts/client.py upload-video /absolute/path/to/meeting.mp4
+
+# Local image; dimensions are part of the API contract
+python3 scripts/client.py upload-image /absolute/path/to/diagram.png \
+  --width 1600 --height 900
+```
+
+Videos upload directly to signed storage URLs in 5 MiB parts, so large files do not pass through the dashboard service. The client initializes `POST /uploads`, uploads and completes one returned storage provider, then calls the returned `/complete` URL. Processing is asynchronous: poll `GET /recordings/:recording_id`; a temporary 404 is expected before the recording is created.
+
+Images initialize through the same `POST /uploads` endpoint and then use the returned signed PUT URL. They do not require a separate completion call.
+
+The API currently accepts local files only. Importing a Zoom, Dropbox, or other remote download URL is not supported.
+
+### Direct initialization shapes
+
+```json
+{ "type": "video", "title": "meeting.mp4", "size_bytes": 104857600 }
+```
+
+```json
+{
+  "type": "image",
+  "title": "diagram.png",
+  "size_bytes": 240123,
+  "content_type": "image/png",
+  "width": 1600,
+  "height": 900
+}
+```
+
+Do not send API credentials to the signed storage URLs. Use the Bearer token only for Kommodo API calls.
+
+---
+
+## 6. Pagination
 
 Cursors are opaque base64 strings. Treat them as black boxes:
 
@@ -178,7 +224,7 @@ For incremental syncs, combine `since` with cursor traversal — the cursor hand
 
 ---
 
-## 6. Errors
+## 7. Errors
 
 | Status | Meaning                                          | Action                                                                                             |
 | ------ | ------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
@@ -222,7 +268,7 @@ def get(url, **kw):
 
 ---
 
-## 7. Curl reference
+## 8. Curl reference
 
 ```bash
 # List the 5 most recent recordings
@@ -248,9 +294,11 @@ curl -X PATCH -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
   "https://kommodo.ai/api/public/v2/recordings/<id>"
 ```
 
+Video upload is not a single curl request. Use the maintained Python client shown in [Upload files](#5-upload-files), or implement the multipart response contract directly.
+
 ---
 
-## 8. Using the API from an AI agent
+## 9. Using the API from an AI agent
 
 This document lives inside the Kommodo skill repo. If you use Claude Code, Cursor, Codex, or any agent that supports skills, install the skill instead of writing a client:
 
@@ -259,11 +307,11 @@ git clone https://github.com/kommodoai/kommodo-skill.git
 ./kommodo-skill/install.sh
 ```
 
-The skill wraps the same endpoints with tool definitions for `find_recordings`, `get_recording`, `get_transcript`, `update_recording`, `create_page`, `list_folders`, and `list_team_members`. Auth is handled via `KOMMODO_API_TOKEN` in your environment. See `SKILL.md` in this repo for the full tool reference.
+The skill wraps the same endpoints with tool definitions for `upload_video`, `upload_image`, `find_recordings`, `get_recording`, `get_transcript`, `update_recording`, `create_page`, `list_folders`, and `list_team_members`. Auth is handled via `KOMMODO_API_TOKEN` in your environment. See `SKILL.md` in this repo for the full tool reference.
 
 ---
 
-## 9. Support
+## 10. Support
 
 - Token issues, scope upgrades, premium activation: support@kommodo.ai
 - API bug reports: include the request URL, the response status, and the timestamp in UTC. We will correlate from server logs.
