@@ -162,7 +162,7 @@ Returns `404` if no transcript exists yet (still processing or transcription dis
 | Method  | Path                                   | Purpose                                                                                                                                                   | Scope |
 | ------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
 | GET     | `/folders`                             | List owned and directly shared folders. `parent_id` scopes a level; `member_id` requires visibility to that member.                                      | read  |
-| POST    | `/folders`                             | Create under `parent_id`, or under the caller's root when omitted.                                                                                        | write |
+| POST    | `/folders`                             | Create under an owned `parent_id`, or under the caller's root when omitted.                                                                                | write |
 | PATCH   | `/folders/:id`                         | Rename a folder the caller owns or has full access to.                                                                                                    | write |
 | DELETE  | `/folders/:id`                         | Delete an empty non-root folder. Returns 409 instead of recursively deleting content.                                                                     | write |
 | GET     | `/team/members`                        | List the account roster. **Account-owner only**; other callers get 403.                                                                                   | read  |
@@ -171,12 +171,12 @@ Returns `404` if no transcript exists yet (still processing or transcription dis
 | POST    | `/uploads`                             | Initialize an image or multipart-video upload.                                                                                                            | write |
 | POST    | `/uploads/:upload_id/complete`         | Queue a completed multipart video for processing.                                                                                                         | write |
 
-Write endpoints require a `read+write` scope token and apply the same access rules as the dashboard. Folder and recording changes require ownership or `fullAccess` at the relevant folder boundary.
+Write endpoints require a `read+write` scope token and apply the same access rules as the dashboard. Folder and recording changes require ownership or `fullAccess` at the relevant folder boundary. Folder creation is narrower: its parent must be owned by the token's user.
 
 Folder writes are ordinary JSON requests:
 
 ```bash
-# Create under your root (add parent_id to create a subfolder)
+# Create under your root (add an owned parent_id to create a subfolder)
 curl -X POST -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"Customer calls"}' \
@@ -278,7 +278,7 @@ For incremental syncs, combine `since` with cursor traversal — the cursor hand
 | 403    | Account policy or scope denies the operation.    | Not retryable without changing the token scope or account access.                                  |
 | 404    | Recording or transcript not found.               | Skip and continue. Transcripts are not ready instantly.                                            |
 | 413    | Transcript exceeds 5 MB.                         | No transcript URL is exposed. Fall back to `GET /recordings/:id` and use `ai.summary`.             |
-| 409    | Folder is not empty.                             | Move its child folders, recordings, and guides first. Do not recursively delete them.              |
+| 409    | Folder is not empty.                             | Move child folders, recordings, guides, and restorable items in trash first. Do not recursively delete them. |
 | 429    | Request pacing limit reached.                    | Sleep `Retry-After` seconds. `X-RateLimit-Reset` is **seconds remaining**, not an epoch timestamp. |
 | 502    | Upstream transcript unreachable / malformed.     | Retry with exponential backoff. Skip the recording after 3.                                        |
 | 5xx    | Other server error.                              | Retry with exponential backoff (start at 1s, cap at 60s).                                          |

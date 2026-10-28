@@ -66,11 +66,11 @@ All tools are thin Python wrappers around the HTTP API in `scripts/client.py`. T
 
 6. `update_recording(id, title=None, description=None, tags=None, folder_id=None)` — patch one or more fields. Pass `None` to skip a field; pass `''` or `[]` to clear. `folder_id=None` means "don't touch"; `folder_id=""` or `folder_id=null` in the JSON means "remove from folder".
 
-7. `create_folder(name, parent_id=None)` — create below `parent_id`, or below the caller's root when omitted. Creating inside a shared folder requires full access.
+7. `create_folder(name, parent_id=None)` — create below an owned `parent_id`, or below the caller's root when omitted. Creating inside someone else's shared folder is not supported.
 
 8. `rename_folder(id, name)` — rename a folder the caller owns or has full access to.
 
-9. `delete_folder(id)` — delete an empty, non-root folder. A folder with child folders, recordings, or guides returns 409; move them first. Never interpret this as permission to delete its contents.
+9. `delete_folder(id)` — delete an empty, non-root folder. A folder with child folders, recordings, guides, or restorable items in trash returns 409; move them first. Never interpret this as permission to delete its contents.
 
 10. `create_page(recording_id, headline=None, description=None, publish=False, template_id=None)` — converts a recording into a page (draft by default). Returns `{page: {id, published, template_id}, recording_id}`. The response does not include a custom-domain URL; fetch the recording envelope for its canonical Kommodo URL. `template_id` is stored as metadata, but the API currently creates the default layout. Fails with 409 if the recording already has a page.
 

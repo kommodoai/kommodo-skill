@@ -220,7 +220,7 @@ def update_recording(
 
 
 def create_folder(name: str, parent_id: str | None = None) -> dict[str, Any]:
-    """Create a folder below parent_id, or below the caller's root if omitted."""
+    """Create below an owned parent_id, or below the caller's root if omitted."""
     body: dict[str, Any] = {"name": name}
     if parent_id is not None:
         body["parent_id"] = parent_id
@@ -233,7 +233,7 @@ def rename_folder(id: str, name: str) -> dict[str, Any]:
 
 
 def delete_folder(id: str) -> dict[str, Any]:
-    """Delete an empty non-root folder. Returns {id, deleted: true}."""
+    """Delete an empty non-root folder; items in trash also block deletion."""
     return _request("DELETE", f"/api/public/v2/folders/{id}")
 
 
