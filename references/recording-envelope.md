@@ -23,7 +23,7 @@ interface RecordingV2 {
     name: string
   }
   urls: {
-    page: string // user-facing page URL (may not be published)
+    page: string // canonical Kommodo recording URL; not a custom-domain URL
     video: string // HLS or MP4; server-presigned, no auth needed
     poster: string // JPG thumbnail; server-presigned, no auth needed
   }
@@ -94,7 +94,11 @@ A list consumer that wants only AI-ready recordings can filter client-side on `a
 
 ## Page state
 
-`page` is present on the envelope only when the recording has been converted via `create_page` (or the legacy dashboard flow). `page.published: false` means draft; `page.published: true` means it's live at `urls.page`.
+`page` is present on the envelope only when the recording has been converted via
+`create_page` (or the legacy dashboard flow). `page.published: false` means
+draft; `page.published: true` means the page is published. `urls.page` is the
+canonical Kommodo recording URL and follows the recording's sharing and
+passcode rules. The page-creation response does not include a custom-domain URL.
 
 ## Time conventions
 

@@ -1,20 +1,29 @@
 # Kommodo Public API v2 — Developer Quickstart
 
-Read recordings, transcripts, AI metadata, folders, and team members. Update titles and create pages.
+Upload media; read recordings, transcripts, AI metadata, folders, and team members; update recordings and create Pages.
 
 **Base URL:** `https://kommodo.ai/api/public/v2`
 **Auth:** `Authorization: Bearer <token>`
-**Rate limit:** 1000 requests/hour, 100 concurrent per token. Headers `X-RateLimit-Remaining` and `X-RateLimit-Reset` are returned on every response.
+**Request pacing:** Bearer-authenticated v2 calls include `X-RateLimit-Remaining` and `X-RateLimit-Reset`. On `429`, wait the `Retry-After` duration rather than hard-coding a quota.
 
 ---
 
 ## 1. Get a token
 
 1. Sign in at https://kommodo.ai and open **Account → API**.
-2. Click **Generate token**. Choose `read` (default) or `read+write` scope.
-3. Copy the token. It is shown once. Treat it like a password.
+2. Click **Generate token**. Choose `read` (default) or `read+write` for uploads and other write operations.
+3. Copy the token. Treat it like a password.
 
-Tokens are user-scoped. A team-owner token with an active premium subscription sees all team members' recordings; a solo token sees only the user's own recordings.
+API access requires an active paid account billed through Stripe. Tokens are user-scoped. Team visibility follows the same live account and group policy as the dashboard; a solo token sees only the user's own recordings.
+
+For a local Bash or Zsh session, set the token without placing it in shell history:
+
+```bash
+printf 'Paste your Kommodo API token: '
+IFS= read -r -s KOMMODO_API_TOKEN
+export KOMMODO_API_TOKEN
+printf '\n'
+```
 
 ---
 
@@ -23,8 +32,7 @@ Tokens are user-scoped. A team-owner token with an active premium subscription s
 The pattern: keep a watermark of the last `created_at` you successfully processed, page forward from there, fetch transcripts by ID.
 
 ```python
-import os, time, requests
-from datetime import datetime, timezone
+import os, requests
 
 BASE = "https://kommodo.ai/api/public/v2"
 TOKEN = os.environ["KOMMODO_API_TOKEN"]
@@ -59,14 +67,18 @@ def fetch_transcript(recording_id: str):
 
 def run(since_iso: str):
     latest = since_iso
+    transcript_pending = False
     for rec in list_recordings(since_iso):
         transcript = fetch_transcript(rec["id"])
         if transcript is None:
+            transcript_pending = True
             continue
-        save(rec, transcript)              # your storage
+        save(rec, transcript)              # idempotent/upsert by recording id
         if rec["created_at"] > latest:
             latest = rec["created_at"]
-    return latest                          # persist this for next run
+    # Do not advance past a recording whose transcript is not ready. This may
+    # replay successful records on the next run, so save() must be idempotent.
+    return since_iso if transcript_pending else latest
 
 if __name__ == "__main__":
     last = load_watermark() or "2025-01-01T00:00:00Z"
@@ -75,6 +87,7 @@ if __name__ == "__main__":
 ```
 
 Run it under cron, GitHub Actions, or Cloud Scheduler. The same code works for daily and weekly cadences — just change how often you invoke it.
+`since` is inclusive, so the record at the watermark can appear again; deduplicate by recording id.
 
 ---
 
@@ -90,12 +103,16 @@ List recordings the token can see, newest first.
 | ------------ | ------- | -------------------------------------------------------------------------------- |
 | `since`      | ISO8601 | Only recordings created on or after this timestamp.                              |
 | `until`      | ISO8601 | Only recordings created on or before this timestamp.                             |
-| `q`          | string  | Substring match on title.                                                        |
+| `q`          | string  | Recording-title search only. Does not search transcripts or AI metadata.         |
 | `folder_id`  | string  | Only recordings whose `parentId` matches. Caller must have access to the folder. |
-| `member_id`  | string  | Filter to a single team member. Team-owner + premium tokens only.                |
+| `member_id`  | string  | Filter to a team member visible under the caller's account policy.               |
 | `has_page`   | bool    | `true` returns only recordings that have a published or draft page.              |
 | `cursor`     | opaque  | Pass through `next_cursor` from the previous response.                           |
 | `limit`      | int     | Default 20, max 100.                                                             |
+
+For libraries over 1,000 recordings, combine `q` or `has_page` with a bounded
+`since` / `until` window on solo accounts. A `folder_id` request can inspect
+only the newest 1,000 recordings in that folder, even when dates are supplied.
 
 **Response**
 
@@ -157,16 +174,105 @@ Returns `404` if no transcript exists yet (still processing or transcription dis
 
 | Method  | Path                                   | Purpose                                                                                                                                                   | Scope |
 | ------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
-| GET     | `/folders`                             | List folders. `parent_id` to scope. `member_id` requires a **team-owner token with active premium** — a solo caller must omit it, even for their own uid. | read  |
-| GET     | `/team/members`                        | List team members. **Team-owner + active premium only**; every other caller gets 403.                                                                     | read  |
-| PATCH   | `/recordings/:id`                      | Update `title`, `description`, `folder_id`.                                                                                                               | write |
+| GET     | `/folders`                             | Paginated owned/shared folders. Supports `parent_id`, `member_id`, `cursor`, and `limit` (default 20, max 100).                                          | read  |
+| POST    | `/folders`                             | Create under an owned `parent_id`, or under the caller's root when omitted.                                                                                | write |
+| PATCH   | `/folders/:id`                         | Rename a folder the caller owns or has full access to.                                                                                                    | write |
+| DELETE  | `/folders/:id`                         | Delete an empty non-root folder. Returns 409 instead of recursively deleting content.                                                                     | write |
+| GET     | `/team/members`                        | List the account roster. **Account-owner only**; other callers get 403.                                                                                   | read  |
+| PATCH   | `/recordings/:id`                      | Update `title`, `description`, `tags`, or `folder_id`.                                                                                                    | write |
 | POST    | `/recordings/:id/pages`                | Create a page from a recording.                                                                                                                           | write |
+| POST    | `/uploads`                             | Initialize an image or multipart-video upload.                                                                                                            | write |
+| POST    | `/uploads/:upload_id/complete`         | Queue a completed multipart video for processing.                                                                                                         | write |
 
-Write endpoints require a `read+write` scope token and apply the same access rules as the dashboard (owner, or `fullAccess` on the parent folder).
+Write endpoints require a `read+write` scope token and apply the same access rules as the dashboard. Folder and recording changes require ownership or `fullAccess` at the relevant folder boundary. Folder creation is narrower: its parent must be owned by the token's user.
+
+Folder writes are ordinary JSON requests:
+
+```bash
+# Create under your root (add an owned parent_id to create a subfolder)
+curl -X POST -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Customer calls"}' \
+  "https://kommodo.ai/api/public/v2/folders"
+
+# Rename
+curl -X PATCH -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Customer calls — archived"}' \
+  "https://kommodo.ai/api/public/v2/folders/<folder-id>"
+
+# Delete only after moving every child folder, recording, and guide
+curl -X DELETE -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
+  "https://kommodo.ai/api/public/v2/folders/<folder-id>"
+```
+
+Recording updates accept `title` (up to 500 characters), `description` (up to 5,000), `tags` (up to 32 non-empty strings of 64 characters each), and `folder_id`. Send `folder_id: null` to remove a recording from its folder.
+
+`POST /recordings/:id/pages` creates a draft unless `publish: true` is sent. Its response contains the Page id and published state, but not a public or custom-domain URL. Fetch `GET /recordings/:id` after creation for the canonical `urls.page`; the API does not currently return a custom-domain URL.
 
 ---
 
-## 5. Pagination
+## 5. Upload files
+
+Upload is a language-neutral HTTP contract. You do not need Python, this repository, or a Kommodo SDK. The canonical [public upload guide](https://kommodo.ai/developer#uploads) documents the complete request and response schemas and provides tested cURL and dependency-free Node references.
+
+The high-level flow is:
+
+1. Initialize `POST /uploads` with a read+write Bearer token.
+2. Send image or video bytes directly to the returned signed storage URLs **without** the Bearer token.
+3. For video, retain each part response's `ETag`, POST ordered `CompleteMultipartUpload` XML to the selected provider's `complete_url`, then POST the returned `completion_token` to `/uploads/:upload_id/complete` with the Bearer token.
+4. Poll `GET /recordings/:recording_id`. A temporary 404 is expected before processing creates the recording.
+
+Runnable references, with no repository clone:
+
+```bash
+# Complete cURL + jq video uploader
+curl -fsS https://kommodo.ai/api-examples/upload-video.sh -o upload-video.sh
+less upload-video.sh
+chmod +x upload-video.sh
+./upload-video.sh /absolute/path/to/meeting.mp4
+
+# Dependency-free Node 20+ video uploader
+curl -fsS https://kommodo.ai/api-examples/upload-video.mjs -o upload-video.mjs
+node upload-video.mjs /absolute/path/to/meeting.mp4
+```
+
+Videos upload directly to signed storage URLs in the returned chunk size, so large files do not pass through the dashboard service. Retry transient part failures. If one provider fails, call its `abort_url` and restart the whole file against the next provider. Finish before `expires_in_seconds`; otherwise initialize a new upload.
+
+Images initialize through the same `POST /uploads` endpoint and then use the returned signed PUT URL. They do not require a separate completion call.
+
+The skill repository also includes an optional Python 3.9+ implementation for agent workflows:
+
+```bash
+python3 scripts/client.py upload-video /absolute/path/to/meeting.mp4
+python3 scripts/client.py upload-image /absolute/path/to/diagram.png \
+  --width 1600 --height 900
+```
+
+The API does not accept a Zoom, Dropbox, or other source URL directly. A custom integration can download or stream the remote file itself, then upload those bytes through this protocol.
+
+### Direct initialization shapes
+
+```json
+{ "type": "video", "title": "meeting.mp4", "size_bytes": 104857600 }
+```
+
+```json
+{
+  "type": "image",
+  "title": "diagram.png",
+  "size_bytes": 240123,
+  "content_type": "image/png",
+  "width": 1600,
+  "height": 900
+}
+```
+
+Do not send API credentials to the signed storage URLs. Use the Bearer token only for Kommodo API calls.
+
+---
+
+## 6. Pagination
 
 Cursors are opaque base64 strings. Treat them as black boxes:
 
@@ -178,24 +284,26 @@ For incremental syncs, combine `since` with cursor traversal — the cursor hand
 
 ---
 
-## 6. Errors
+## 7. Errors
 
 | Status | Meaning                                          | Action                                                                                             |
 | ------ | ------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
 | 401    | Missing or invalid token.                        | Reissue the token at /account.                                                                     |
 | 403    | Your token is read-only and the endpoint writes. | Generate a read+write token at /account.                                                           |
 | 403    | You do not have access to that recording.        | Check the id belongs to your account or a folder shared with you.                                  |
-| 403    | Team-owner endpoint. See below.                  | Not retryable.                                                                                     |
+| 403    | Account policy or scope denies the operation.    | Not retryable without changing the token scope or account access.                                  |
 | 404    | Recording or transcript not found.               | Skip and continue. Transcripts are not ready instantly.                                            |
 | 413    | Transcript exceeds 5 MB.                         | No transcript URL is exposed. Fall back to `GET /recordings/:id` and use `ai.summary`.             |
-| 429    | Rate limit exceeded.                             | Sleep `Retry-After` seconds. `X-RateLimit-Reset` is **seconds remaining**, not an epoch timestamp. |
-| 502    | Upstream transcript unreachable / malformed.     | Retry with exponential backoff. Skip the recording after 3.                                        |
+| 409    | Folder is not empty.                             | Move child folders, recordings, guides, and restorable items in trash first. Do not recursively delete them. |
+| 409    | A Page or completed upload already exists.       | Do not create a duplicate. Fetch the recording state instead.                                      |
+| 429    | Request pacing limit reached.                    | Sleep `Retry-After` seconds. `X-RateLimit-Reset` is **seconds remaining**, not an epoch timestamp. |
+| 502    | Transcript or upload service temporarily failed. | Retry with exponential backoff.                                                                    |
+| 503    | Billing verification is temporarily unavailable. | Wait for `Retry-After`, then retry.                                                                 |
 | 5xx    | Other server error.                              | Retry with exponential backoff (start at 1s, cap at 60s).                                          |
 
-Two endpoints are restricted to team owners with an active premium subscription:
-`GET /team/members`, and the `member_id` parameter on `GET /folders`. Every other caller
-receives a 403. Retrying will not help — omit `member_id`, or skip `/team/members` and
-pass a uid you already hold.
+`GET /team/members` is restricted to account owners. The `member_id` parameter on
+`GET /folders` requires that the account visibility policy expose that member. Retrying
+will not help when the policy denies the request.
 
 A pragmatic retry policy for cron jobs:
 
@@ -222,7 +330,7 @@ def get(url, **kw):
 
 ---
 
-## 7. Curl reference
+## 8. Curl reference
 
 ```bash
 # List the 5 most recent recordings
@@ -248,22 +356,26 @@ curl -X PATCH -H "Authorization: Bearer $KOMMODO_API_TOKEN" \
   "https://kommodo.ai/api/public/v2/recordings/<id>"
 ```
 
+Video upload is not a single request. Use the complete cURL reference in [Upload files](#5-upload-files), the dependency-free Node reference, or implement the documented multipart contract in your language.
+
 ---
 
-## 8. Using the API from an AI agent
+## 9. Using the API from an AI agent
 
-This document lives inside the Kommodo skill repo. If you use Claude Code, Cursor, Codex, or any agent that supports skills, install the skill instead of writing a client:
+For Claude Code, install the skill so the agent can load the API instructions and bundled helper:
 
 ```bash
 git clone https://github.com/kommodoai/kommodo-skill.git
 ./kommodo-skill/install.sh
 ```
 
-The skill wraps the same endpoints with tool definitions for `find_recordings`, `get_recording`, `get_transcript`, `update_recording`, `create_page`, `list_folders`, and `list_team_members`. Auth is handled via `KOMMODO_API_TOKEN` in your environment. See `SKILL.md` in this repo for the full tool reference.
+The skill describes the same endpoints and includes Python helper functions for uploads, recording retrieval and updates, Page creation, folder listing and writes, and team-member lookup. Auth is handled via `KOMMODO_API_TOKEN` in your environment. See `SKILL.md` in this repo for the helper reference.
+
+Other agents and applications should call the same HTTP API directly. Agent Skills-compatible products may also load `SKILL.md`, but their installation path is product-specific; the included installer targets Claude Code.
 
 ---
 
-## 9. Support
+## 10. Support
 
 - Token issues, scope upgrades, premium activation: support@kommodo.ai
 - API bug reports: include the request URL, the response status, and the timestamp in UTC. We will correlate from server logs.
