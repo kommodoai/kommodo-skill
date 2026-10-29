@@ -73,7 +73,8 @@ from scripts.client import (
 batch = find_recordings(query="standup", since="2026-04-16T00:00:00Z", until="2026-04-16T23:59:59Z")
 candidates = batch["recordings"]
 if len(candidates) != 1:
-    # Surface candidates to user, ask for disambiguation
+    # Show title, date, owner, and folder; ask the user to choose without
+    # exposing internal ids.
     raise RuntimeError(f"Ambiguous: {len(candidates)} matches")
 
 rec_id = candidates[0]["id"]
@@ -110,10 +111,11 @@ result = create_page(
     publish=True,
 )
 
-# result["page"]["id"] → use urls.page from the updated recording envelope
+# Keep result ids internal. Fetch the updated recording and report its title
+# plus urls.page to the user.
 ```
 
-Handle `KommodoAPIError.status == 409` by calling `get_recording(rec["id"])` and reporting its existing `page`; the error response itself does not contain the Page id. Do not try to create another Page.
+Handle `KommodoAPIError.status == 409` by calling `get_recording(rec["id"])` and reporting the recording title plus its existing `urls.page`. Do not expose the Page id or try to create another Page.
 
 ---
 
@@ -157,6 +159,7 @@ pending = [r for r in all_recs if r["ai"]["status"] != "ready"]
 
 ## Composition rules (enforceable)
 
+- **Use IDs only inside helper calls.** User-facing responses identify recordings by title and, when useful, date, owner, folder, or link. Show an ID only when the user explicitly requests it or is debugging an integration.
 - **Always confirm before writes** (guideline in SKILL.md) unless the user has explicitly approved the action in the same turn.
 - **Transcripts are expensive** — do not pull them unless the user's question genuinely requires the raw text (e.g., "find the moment where X was discussed"). Summaries + action items usually suffice.
 - **Cursor until null** for incremental-sync scenarios. For ad-hoc queries, stop after the first page and say "showing the first 20 matches; ask me to continue" when `next_cursor` is present. The API does not return a total count.

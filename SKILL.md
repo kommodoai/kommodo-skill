@@ -86,7 +86,7 @@ The helper reads the token from the process environment; never place the token i
 
 9. `delete_folder(id)` — delete an empty, non-root folder. A folder with child folders, recordings, guides, or restorable items in trash returns 409; move them first. Never interpret this as permission to delete its contents.
 
-10. `create_page(recording_id, headline=None, description=None, publish=False, template_id=None)` — converts a recording into a page (draft by default). Returns `{page: {id, published, template_id}, recording_id}`. The response does not include a custom-domain URL; fetch the recording envelope for its canonical Kommodo URL. `template_id` is stored as metadata, but the API currently creates the default layout. Fails with 409 if the recording already has a page.
+10. `create_page(recording_id, headline=None, description=None, publish=False, template_id=None)` — converts a recording into a page (draft by default). Returns `{page: {id, published, template_id}, recording_id}`. The response does not include a custom-domain URL; fetch the recording envelope for its canonical Kommodo URL and share the recording title plus `urls.page`, not the raw Page or recording id. `template_id` is stored as metadata, but the API currently creates the default layout. Fails with 409 if the recording already has a page.
 
 11. `upload_video(file_path, title=None, concurrency=4)` — uploads a local video directly to Kommodo storage using the API's multipart contract, then queues processing. Returns `{upload_id, recording_id, status: "processing"}`. The path must refer to a file the user has authorized the agent to upload.
 
@@ -125,8 +125,9 @@ The lower bound is inclusive, so deduplicate by recording id. Do not advance a t
 
 ```
 upload_video("/absolute/path/to/meeting.mp4")
-  → report the returned recording_id and that processing continues asynchronously
+  → keep the returned recording_id internal and tell the user the named file is processing
   → use get_recording(recording_id) later; 404 is expected until processing creates the recording
+  → when ready, report the recording title and urls.page rather than its id
 ```
 
 The upload helpers accept local files only. The API has no source-URL import parameter; a custom integration may download or stream remote media itself, then upload those bytes through the same protocol.
@@ -139,7 +140,7 @@ The upload helpers accept local files only. The API has no source-URL import par
 | 403  | Read-only token used on a write endpoint              | Ask the user for a read+write token.                                                                          |
 | 403  | No permission to modify this recording                | State that access was denied and stop; do not guess the owner.                                                 |
 | 403  | `list_team_members`, or unavailable `member_id`       | The account policy does not expose that roster/member. Tell the user, and do not retry.                       |
-| 404  | Recording not found or not visible to caller          | Confirm the id; the user may not have access                                                                  |
+| 404  | Recording not found or not visible to caller          | Confirm the requested title/link and access; do not ask the user to interpret an internal id.                 |
 | 409  | Recording already has a page (on `create_page`)       | Tell the user and stop — do not try to overwrite                                                              |
 | 409  | Folder is not empty                                  | Move its child folders, recordings, and guides first; never recursively delete them.                          |
 | 413  | Transcript exceeds 5 MB                               | Rare; recording is unusually long. Fall back to `get_recording` summary instead.                              |
@@ -149,7 +150,7 @@ The upload helpers accept local files only. The API has no source-URL import par
 
 ## Guardrails
 
-- **Never present an ID field as prose.** When referring to a recording, include its `title` first and the `id` parenthetical.
+- **Keep internal IDs internal.** Use recording titles plus useful context such as date, owner, folder, or `urls.page`. Do not show recording, presentation, Page, folder, owner, upload, or member IDs unless the user explicitly asks for an ID or is debugging an integration. When titles collide, disambiguate with human-readable context rather than an ID.
 - **Never expose the transcript URL in output** — it's auth-gated. Either summarize or quote cues with timestamps.
 - **For write actions, always state what you will do before doing it** (`"I'm going to rename 'Sprint Review 4/12' to 'Sprint Review — Acme launch'; proceed?"`) and wait for user confirmation, unless the user has already explicitly given scope-specific instructions in the same turn.
 - **Never upload an inferred file.** Use only the exact local path the user supplied or explicitly selected, and state the filename before starting the transfer.

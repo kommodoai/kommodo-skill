@@ -116,7 +116,9 @@ without an agent:
 python3 scripts/client.py upload-video /absolute/path/to/meeting.mp4
 ```
 
-The command returns the new `recording_id` with `status: processing`. Developers
+The command returns the internal `recording_id` for programmatic polling with
+`status: processing`; agents should describe the upload by filename/title and
+link rather than exposing that id to the user. Developers
 using JavaScript, Go, Ruby, PHP, Java, cURL, or another HTTP client do not need
 this repository. The canonical [public upload guide](https://kommodo.ai/developer#uploads)
 documents the language-neutral protocol and provides complete cURL and Node
