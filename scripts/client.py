@@ -77,7 +77,7 @@ def _request(
 
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
 
-    # Ordinary calls get one retry on 429/502. Upload finalization opts into a
+    # Ordinary calls retry 429 once only when its wait fits 60s, or 502 once. Upload finalization opts into a
     # third attempt for transient 5xx responses because its token is reusable.
     attempts = 3 if retry_server_errors else 2
     for attempt in range(attempts):
@@ -95,10 +95,15 @@ def _request(
             except Exception:
                 parsed_body = body_text
             can_retry = attempt < attempts - 1
-            if e.code == 429 and can_retry:
-                retry_after = int(e.headers.get("Retry-After", "5"))
-                time.sleep(min(retry_after, 60))
-                continue
+            retry_after: int | None = None
+            if e.code == 429:
+                try:
+                    retry_after = int(e.headers.get("Retry-After", "5"))
+                except (ValueError, TypeError):
+                    pass
+                if can_retry and retry_after is not None and 0 <= retry_after <= 60:
+                    time.sleep(retry_after)
+                    continue
             if (
                 (retry_gateway_errors and e.code == 502) or (retry_server_errors and e.code >= 500)
             ) and can_retry:
@@ -109,6 +114,12 @@ def _request(
                 if isinstance(parsed_body, dict)
                 else str(parsed_body)
             )
+            if e.code == 429:
+                if isinstance(parsed_body, dict):
+                    hints = [parsed_body.get("guidance"), parsed_body.get("documentation_url")]
+                    message = " ".join([message or "request failed"] + [hint for hint in hints if isinstance(hint, str)])
+                if retry_after is not None:
+                    message = f"{message or 'request failed'} Retry after {max(0, retry_after)}s."
             raise KommodoAPIError(e.code, parsed_body, message or "request failed")
         except urllib.error.URLError:
             if retry_server_errors and attempt < attempts - 1:

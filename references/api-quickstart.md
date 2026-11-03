@@ -412,7 +412,7 @@ All paths below are relative to `/api/public/v2` and accept the same Bearer toke
    as a replacement of the entire library.
 4. Replay changes from the **initial** checkpoint to catch changes during the
    baseline. Apply each batch idempotently before saving its continuation.
-   resource_version is opaque; changed identifies metadata, media, transcript,
+   Folder upserts also include the current folder object in resource; apply it directly (there is no folder-detail GET). resource_version is opaque; changed identifies metadata, media, transcript,
    ai, folder, page_ref or sharing changes. An upsert includes resource_id and
    the complete current source_refs; replace that resource's associations and
    fetch only the required detail/transcript. A delete removes the local item.
@@ -475,3 +475,15 @@ Authorization and account admission still run on each request. A 304 saves
 transfer/parsing work; it is not a zero-read request. Legacy mutable references
 may have no ETag. The bundled Python get_transcript helper does not cache or
 handle conditional responses; use your HTTP library if you need this feature.
+
+
+### Actionable quota failures
+
+A 429 retains the error message and adds code, retry_after_seconds, guidance and
+documentation_url. Retry-After remains the pacing authority. Guidance recommends
+the change feed/webhooks only when enabled; an unavailable deployment recommends
+pacing scans and reusing previously fetched results. MCP and the Python helper
+surface these instructions. The helper retries 429 once only when the complete
+Retry-After wait is at most 60 seconds; longer waits are returned as errors for
+your scheduler to handle, without an early retry. These messages do not change
+the configured quota or automatically block every repeating crawl.
