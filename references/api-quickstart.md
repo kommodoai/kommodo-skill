@@ -4,7 +4,7 @@ Upload media; read recordings, transcripts, AI metadata, folders, and team membe
 
 **Base URL:** `https://kommodo.ai/api/public/v2`
 **Auth:** `Authorization: Bearer <token>`
-**Request pacing:** Bearer-authenticated v2 calls include `X-RateLimit-Remaining` and `X-RateLimit-Reset`. Account-level admission is shared across tokens and MCP; X-WorkLimit-Remaining reports weighted work. On `429` or a temporary `503`, honor `Retry-After`. Do not retry `sync_not_enabled` until rollout.
+**Request pacing:** Bearer-authenticated v2 calls include `X-RateLimit-Remaining` and `X-RateLimit-Reset`. Account-level admission is shared across tokens and MCP; X-WorkLimit-Remaining reports weighted work. Work allowances can differ by account and include snapshots, change-feed replays and setup calls. Switching endpoints does not bypass an exhausted allowance: wait for Retry-After, then initialize sync once and use changes/webhooks instead of repeated library scans. On `429` or a temporary `503`, honor `Retry-After`. Do not retry `sync_not_enabled` until rollout.
 
 ---
 
