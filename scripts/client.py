@@ -58,6 +58,7 @@ def _request(
     body: dict[str, Any] | None = None,
     accept: str = "application/json",
     retry_server_errors: bool = False,
+    retry_gateway_errors: bool = True,
 ) -> Any:
     url = f"{_base_url()}{path}"
     if params:
@@ -99,7 +100,7 @@ def _request(
                 time.sleep(min(retry_after, 60))
                 continue
             if (
-                e.code == 502 or (retry_server_errors and e.code >= 500)
+                (retry_gateway_errors and e.code == 502) or (retry_server_errors and e.code >= 500)
             ) and can_retry:
                 time.sleep(attempt + 1)
                 continue
@@ -130,6 +131,47 @@ def _json_loads(s: str) -> Any:
 
 
 # ========= Read helpers =========
+
+
+def start_sync() -> dict[str, Any]:
+    """Opt in and open a checkpoint. May return pending; do not begin the baseline yet."""
+    return _request("POST", "/api/public/v2/sync/checkpoints")
+
+
+def get_sync_status() -> dict[str, Any]:
+    """Inspect enrollment after start_sync; wait retry_after_seconds while pending."""
+    return _request("GET", "/api/public/v2/sync/status")
+
+
+def get_sync_snapshot(
+    checkpoint: str, cursor: str | None = None, limit: int = 100
+) -> dict[str, Any]:
+    """Page a baseline or reconcile_ref; preserve all provenance and completion fields."""
+    return _request("GET", "/api/public/v2/sync/snapshot", params={
+        "checkpoint": checkpoint, "cursor": cursor, "limit": limit,
+    })
+
+
+def get_changes(cursor: str, limit: int = 100) -> dict[str, Any]:
+    """Read durable changes after a saved checkpoint; hydrate only changed resources."""
+    return _request("GET", "/api/public/v2/changes", params={
+        "cursor": cursor, "limit": limit,
+    })
+
+
+def list_webhooks() -> dict[str, Any]:
+    """List the caller's destinations and delivery status; never returns secrets."""
+    return _request("GET", "/api/public/v2/webhook-subscriptions")
+
+
+def create_webhook(url: str) -> dict[str, Any]:
+    """Write scope required. Returns the signing secret once; receiver must verify."""
+    return _request("POST", "/api/public/v2/webhook-subscriptions", body={"url": url}, retry_gateway_errors=False)
+
+
+def delete_webhook(subscription_id: str) -> None:
+    """Write scope required. Disable and remove a destination owned by this caller."""
+    _request("DELETE", "/api/public/v2/webhook-subscriptions/" + urllib.parse.quote(subscription_id, safe=""))
 
 
 def find_recordings(

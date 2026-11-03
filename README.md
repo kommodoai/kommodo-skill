@@ -27,7 +27,7 @@ The skill can use these helper functions from `scripts/client.py`:
 
 See [`SKILL.md`](SKILL.md) for the full helper reference, [`references/`](references/) for response schemas and filter recipes.
 
-Integrating without an agent (cron jobs, ETL, plain HTTP)? Start at [`references/api-quickstart.md`](references/api-quickstart.md) — Python sample for nightly transcript sync, full endpoint and error tables.
+Integrating without an agent (cron jobs, ETL, plain HTTP)? Start at [`references/api-quickstart.md`](references/api-quickstart.md) — creation-only import example, staged incremental sync/webhook protocol, endpoint and error tables.
 
 ---
 

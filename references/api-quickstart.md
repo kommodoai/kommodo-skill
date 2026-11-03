@@ -4,7 +4,7 @@ Upload media; read recordings, transcripts, AI metadata, folders, and team membe
 
 **Base URL:** `https://kommodo.ai/api/public/v2`
 **Auth:** `Authorization: Bearer <token>`
-**Request pacing:** Bearer-authenticated v2 calls include `X-RateLimit-Remaining` and `X-RateLimit-Reset`. On `429`, wait the `Retry-After` duration rather than hard-coding a quota.
+**Request pacing:** Bearer-authenticated v2 calls include `X-RateLimit-Remaining` and `X-RateLimit-Reset`. Account-level admission is shared across tokens and MCP; X-WorkLimit-Remaining reports weighted work. On `429` or a temporary `503`, honor `Retry-After`. Do not retry `sync_not_enabled` until rollout.
 
 ---
 
@@ -14,7 +14,7 @@ Upload media; read recordings, transcripts, AI metadata, folders, and team membe
 2. Click **Generate token**. Choose `read` (default) or `read+write` for uploads and other write operations.
 3. Copy the token. Treat it like a password.
 
-API access requires an active paid account billed through Stripe. Tokens are user-scoped. Team visibility follows the same live account and group policy as the dashboard; a solo token sees only the user's own recordings.
+API access requires an active paid account billed through Stripe. Tokens are user-scoped. Team visibility follows the same live account and group policy as the dashboard; recordings in explicitly shared folders remain accessible when their author privacy and recording gates allow it.
 
 For a local Bash or Zsh session, set the token without placing it in shell history:
 
@@ -27,9 +27,9 @@ printf '\n'
 
 ---
 
-## 2. The use case: nightly transcript sync
+## 2. Import newly created recordings (creation filter only)
 
-The pattern: keep a watermark of the last `created_at` you successfully processed, page forward from there, fetch transcripts by ID.
+This example does not detect edits, deletions, or access changes. For an ongoing mirror use the staged sync protocol below. The creation-only pattern: keep a watermark of the last `created_at` you successfully processed, page forward from there, fetch transcripts by ID.
 
 ```python
 import os, requests
@@ -110,9 +110,10 @@ List recordings the token can see, newest first.
 | `cursor`     | opaque  | Pass through `next_cursor` from the previous response.                           |
 | `limit`      | int     | Default 20, max 100.                                                             |
 
-For libraries over 1,000 recordings, combine `q` or `has_page` with a bounded
-`since` / `until` window on solo accounts. A `folder_id` request can inspect
-only the newest 1,000 recordings in that folder, even when dates are supplied.
+After rollout, new folder and solo title/Page-filter traversals use bounded
+candidate pages. Keep all filters unchanged and continue through empty pages
+when next_cursor is present. Old cursors retain their older 1,000-candidate
+fallback behavior; restart without a cursor to use the new traversal.
 
 **Response**
 
@@ -274,13 +275,13 @@ Do not send API credentials to the signed storage URLs. Use the Bearer token onl
 
 ## 6. Pagination
 
-Cursors are opaque base64 strings. Treat them as black boxes:
+Cursors are opaque strings; do not decode, edit or construct them. Treat them as black boxes:
 
 1. Call without `cursor`.
 2. If `next_cursor` is non-null, pass it back on the next request.
 3. Stop when `next_cursor` is `null`.
 
-For incremental syncs, combine `since` with cursor traversal — the cursor handles ordering within a window, `since` handles the window itself.
+For creation-only imports, combine `since` with cursor traversal. `since` filters creation time, so it cannot detect later edits or deletions. Keep all filters unchanged between pages. An empty page is not terminal if next_cursor is present.
 
 ---
 
@@ -379,3 +380,98 @@ Other agents and applications should call the same HTTP API directly. Agent Skil
 
 - Token issues, scope upgrades, premium activation: support@kommodo.ai
 - API bug reports: include the request URL, the response status, and the timestamp in UTC. We will correlate from server logs.
+
+
+## Incremental sync and webhooks (staged rollout)
+
+These endpoints require the sync feature to be enabled on the deployment.
+`503` with `code: sync_not_enabled` means unavailable; do not loop retries.
+Existing list/detail/transcript calls continue to work independently.
+
+All paths below are relative to `/api/public/v2` and accept the same Bearer token.
+
+| Method | Path | Scope | Result |
+| --- | --- | --- | --- |
+| POST | /sync/checkpoints | read | Idempotently enroll; pending (202) or ready (200) |
+| GET | /sync/status | read | pending with retry_after_seconds, or ready with checkpoint |
+| GET | /sync/snapshot?checkpoint=…&cursor=…&limit=100 | read | Bounded baseline or reconciliation page |
+| GET | /changes?cursor=…&limit=100 | read | Minimal changes and next_cursor/checkpoint |
+| GET | /webhook-subscriptions | read | subscriptions with id, url, state, last_delivery_status |
+| POST | /webhook-subscriptions | write | `{url: "https://…"}`; subscription plus signing_secret once |
+| DELETE | /webhook-subscriptions/{id} | write | Disable/remove caller's destination (204) |
+
+1. Open a checkpoint. While pending, wait retry_after_seconds and inspect status.
+2. Save the first ready checkpoint **before** the baseline. Page snapshot with
+   that checkpoint until complete. Items have resource_type, resource, scope_ref
+   and source_refs. Page-level fields include scope_ref, scope_complete,
+   removed_scopes, complete and next_cursor. Empty pages can have continuation.
+3. Track associations by opaque source key. Stage all pages of a source until
+   scope_complete, then replace only that source's associations. Apply
+   removed_scopes; remove a local resource only when no valid source remains.
+   Shared folders and team access can overlap. Do not treat a scoped snapshot
+   as a replacement of the entire library.
+4. Replay changes from the **initial** checkpoint to catch changes during the
+   baseline. Apply each batch idempotently before saving its continuation.
+   resource_version is opaque; changed identifies metadata, media, transcript,
+   ai, folder, page_ref or sharing changes. An upsert includes resource_id and
+   the complete current source_refs; replace that resource's associations and
+   fetch only the required detail/transcript. A delete removes the local item.
+5. For operation reconcile, page snapshot with checkpoint=reconcile_ref, applying
+   its removals and source replacements before advancing the change cursor.
+6. Follow next_cursor while non-null; otherwise persist checkpoint. Quiet reads
+   return an empty array and a renewed checkpoint. Honor errors and pacing.
+
+History/checkpoints last up to 30 days; scope activity is renewed by normal feed
+reads. `410 resync_required` means open a new checkpoint and rebuild the baseline.
+`409 sync_pending` means enrollment or reconciliation is pending: wait before
+retrying. Wrong-user/tampered cursors return 400. Visibility is checked against
+current authority. The feed converges to current state, not a full immutable
+history of every intermediate edit. A resource can change again before hydration.
+
+### Webhook receiver
+
+Dashboard users can create/list/remove destinations in Account → API using their
+signed-in session, without replacing a read-only integration token. HTTP creation
+and removal require write scope. Five destinations per user are allowed. Remove
+and recreate paused destinations after correcting the receiver.
+
+Creation returns signing_secret once. Store the exact returned string as the
+UTF-8 HMAC key (do not base64-decode it). Do not print it into an agent transcript.
+The first verification is scheduled no sooner than 30 seconds after creation.
+For every request, validate its timestamp (e.g. ±300 seconds) and verify:
+
+```
+Kommodo-Webhook-Signature = v1=<hex HMAC-SHA256(secret, timestamp + "." + raw_body)>
+```
+
+Use the exact `Kommodo-Webhook-Timestamp` header string and unmodified body bytes;
+compare signatures in constant time before parsing or doing work. Do not reuse
+the API Bearer token as the secret. For a subscription.verify payload containing
+subscription_id and nonce, return 2xx JSON within five seconds:
+
+```
+{"challenge_response": "<hex HMAC-SHA256(secret, 'verify.' + subscription_id + '.' + nonce)>"}
+```
+
+An active receiver gets sync.available events (id, type, subscription_id,
+created_at, version), without recording content. Persist a deduplicated wake-up
+job keyed by Kommodo-Webhook-Id, respond 2xx quickly, then replay changes from
+your durable saved checkpoint. Notifications coalesce changes for at least 30
+seconds; scheduler and queue latency apply. Delivery can repeat. Keep occasional
+feed checks as recovery, rather than re-crawling every folder and transcript.
+
+The receiver must be public HTTPS. Private/reserved addresses and redirects are
+blocked at connection time. Responses are capped at 4 KiB, timeout is five
+seconds, and a notification has at most five reserved attempt slots within
+24 hours. Provider/secret failures or a crashed worker can consume a slot without
+an HTTP request. Backoff is 1 minute, 5 minutes, 30 minutes and 2 hours; bounded
+Retry-After is respected. Exhaustion pauses the subscription; inspect status.
+
+### Transcript revalidation
+
+Immutable transcript artifacts support format-specific ETags. Store body plus
+ETag, then send If-None-Match on the same format. On 304, use your stored body.
+Authorization and account admission still run on each request. A 304 saves
+transfer/parsing work; it is not a zero-read request. Legacy mutable references
+may have no ETag. The bundled Python get_transcript helper does not cache or
+handle conditional responses; use your HTTP library if you need this feature.
