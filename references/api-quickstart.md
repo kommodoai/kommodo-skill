@@ -427,6 +427,8 @@ reads. `410 resync_required` means open a new checkpoint and rebuild the baselin
 retrying. Wrong-user/tampered cursors return 400. Visibility is checked against
 current authority. The feed converges to current state, not a full immutable
 history of every intermediate edit. A resource can change again before hydration.
+View counters, processing progress and owner display-profile edits do not emit
+feed events. Fetch recording detail when you need current view counts.
 
 ### Webhook receiver
 
