@@ -19,7 +19,7 @@ Use this as a jumping-off point when translating a user's question into a
 New folder and solo title/Page-filter traversals use bounded candidate pages.
 Keep every filter unchanged when following a cursor. A page can be empty while
 `next_cursor` is non-null: continue until null. Newly issued bounded cursors are
-signed and expire after a day. Restart the traversal after expiry. Old cursors
+authenticated and encrypted, and expire after a day. Restart the traversal after expiry. Old cursors
 retain their older behavior (including the 1,000-candidate fallback); restart
 without a cursor to use the new traversal. These changes apply after rollout.
 
