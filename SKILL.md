@@ -76,6 +76,30 @@ The helper reads the token from the process environment; never place the token i
    So a solo caller must **omit `member_id` entirely** on `list_folders`. Passing your own
    uid there fails even though the same value works on `find_recordings`.
 
+### Efficient ongoing sync (staged availability)
+
+Use start_sync(), then get_sync_status() while pending. When ready, retain the
+initial checkpoint and page get_sync_snapshot(checkpoint, cursor=None, limit=100)
+until complete. Stage each scope through scope_complete; track source_refs and
+removed_scopes so revoking a share does not delete content still available from
+another source. Replay get_changes(initial_checkpoint) after the baseline. Apply
+batches before saving next_cursor/checkpoint; fetch only changed detail/transcript.
+A reconcile operation requires get_sync_snapshot(reconcile_ref) and scoped
+replacement before advancing. 410 means rebuild from a new checkpoint.
+
+list_webhooks(), create_webhook(url), delete_webhook(subscription_id) wrap the
+subscription API. Create/delete require write scope and explicit user instruction.
+A callback needs a verified public HTTPS receiver and a signing secret returned
+once. Never emit that secret in conversation or logs. Explain the receiver setup
+before creating a destination. Prefer dashboard Account → API setup when the
+integration should keep a read token. Follow the complete signature, challenge,
+retry and provenance contract in references/api-quickstart.md.
+
+503 sync_not_enabled means staged functionality is unavailable on this deployment;
+do not retry it repeatedly. Ordinary calls continue to work. Since is still a
+creation-time filter, not a substitute for a change feed. Webhooks wake a durable
+consumer; they do not contain the changes or replace its saved cursor.
+
 ### Write — require read+write scoped token
 
 6. `update_recording(id, title=None, description=None, tags=None, folder_id=None)` — patch one or more fields. Pass `None` to skip a Python argument; pass `''` or `[]` to clear text/tags. In the helper, `folder_id=""` removes the recording from its folder. Direct HTTP callers may send `folder_id: null` for the same result.
@@ -146,7 +170,8 @@ The upload helpers accept local files only. The API has no source-URL import par
 | 413  | Transcript exceeds 5 MB                               | Rare; recording is unusually long. Fall back to `get_recording` summary instead.                              |
 | 429  | Request pacing limit reached                          | Honor `Retry-After` and `X-RateLimit-Reset`. Do not hard-code a quota.                                        |
 | 502  | Transcript or upload service temporarily unavailable | Transient — retry with backoff.                                                                               |
-| 503  | Billing verification temporarily unavailable          | Wait for `Retry-After`, then retry.                                                                            |
+| 410  | Sync checkpoint/history expired | Open a checkpoint and rebuild the baseline. |
+| 503  | Billing verification or admission temporarily unavailable          | Wait for `Retry-After`, then retry.                                                                            |
 
 ## Guardrails
 

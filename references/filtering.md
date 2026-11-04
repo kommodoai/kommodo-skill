@@ -16,10 +16,12 @@ Use this as a jumping-off point when translating a user's question into a
 | `limit`       | int 1..100 | Default 20.                                                                                                                           |
 | `cursor`      | opaque     | From previous response's `next_cursor`.                                                                                               |
 
-For libraries over 1,000 recordings, use a bounded `since` / `until` window
-when combining `query` or `has_page` on a solo account. A `folder_id` request
-can inspect only the newest 1,000 recordings in that folder, even when dates
-are supplied.
+New folder and solo title/Page-filter traversals use bounded candidate pages.
+Keep every filter unchanged when following a cursor. A page can be empty while
+`next_cursor` is non-null: continue until null. Newly issued bounded cursors are
+authenticated and encrypted, and expire after a day. Restart the traversal after expiry. Old cursors
+retain their older behavior (including the 1,000-candidate fallback); restart
+without a cursor to use the new traversal. These changes apply after rollout.
 
 ## Not supported in Phase 1 (filter client-side after `find_recordings`)
 
